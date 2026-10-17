@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>lemmyp</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🖼️</text></svg>">
+</head>
+<body>
+
+<!-- ================= SLIDESHOW ================= -->
+<div id="slideshow" class="hidden">
+
+  <!-- media container -->
+  <div id="slide-container">
+    <div id="slide-media"></div>
+    <!-- next-slide preload (off-screen) -->
+    <div id="slide-next" aria-hidden="true"></div>
+  </div>
+
+  <!-- top control bar -->
+  <div id="ctrl-bar">
+    <span id="ctrl-brand">lemmyp</span>
+    <span id="ctrl-context"></span>
+    <span class="ctrl-spacer"></span>
+    <button id="btn-auto"    class="ctrl-btn" title="Auto-advance  [A]">Auto</button>
+    <span  id="auto-timer"   class="ctrl-timer"></span>
+    <button id="btn-sound"   class="ctrl-btn" title="Sound  [M]">🔇</button>
+    <button id="btn-full"    class="ctrl-btn" title="Fullscreen  [F]">⛶</button>
+    <button id="btn-title"   class="ctrl-btn" title="Title  [T]">T</button>
+    <button id="btn-nsfw"    class="ctrl-btn" title="Toggle NSFW filter  [N]">NSFW</button>
+    <button id="btn-post"    class="ctrl-btn" title="Open post  [O]">Post&nbsp;↗</button>
+    <span  id="slide-counter" class="ctrl-counter"></span>
+  </div>
+
+  <!-- bottom title bar -->
+  <div id="title-bar">
+    <div id="post-title"></div>
+    <div id="post-meta">
+      <span id="meta-community"></span>
+      <span id="meta-score"></span>
+      <span id="meta-comments"></span>
+      <span id="meta-creator"></span>
+      <span id="meta-nsfw" class="nsfw-tag">NSFW</span>
+    </div>
+  </div>
+
+  <!-- loading overlay -->
+  <div id="loading-overlay" class="overlay hidden">
+    <div class="spinner"></div>
+  </div>
+
+  <!-- error overlay -->
+  <div id="error-overlay" class="overlay hidden">
+    <p id="error-msg"></p>
+    <button id="btn-retry" class="ctrl-btn">Retry</button>
+  </div>
+
+</div>
+
+<!-- ================= SELECTOR (no community in URL) ================= -->
+<div id="selector" class="hidden">
+  <h1>lemmyp</h1>
+  <p class="sub">Full-screen Lemmy media slideshow</p>
+
+  <div class="sel-row">
+    <label for="sel-instance">Instance</label>
+    <select id="sel-instance"></select>
+  </div>
+  <div class="sel-row">
+    <label for="sel-community">Community</label>
+    <input id="sel-community" type="text" placeholder="e.g. memes">
+  </div>
+  <div class="sel-row">
+    <label for="sel-sort">Sort</label>
+    <select id="sel-sort">
+      <option value="Hot">Hot</option>
+      <option value="New">New</option>
+      <option value="Active">Active</option>
+      <option value="MostCommented">Most commented</option>
+      <option value="Top">Top (day)</option>
+    </select>
+  </div>
+  <button id="sel-start">Browse&nbsp;→</button>
+</div>
+
+<!-- toast -->
+<div id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

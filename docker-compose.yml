@@ -1,0 +1,9 @@
+services:
+  lemmyp:
+    build: .
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    # Optional: override default instance
+    # environment:
+    #   - PORT=8080
