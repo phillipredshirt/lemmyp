@@ -114,7 +114,14 @@ async function fetchPosts(page, append) {
   const q = new URLSearchParams();
   // Lemmy post/list takes "community_name" (NOT "c") -- "c" is silently
   // ignored upstream, so every sub would show the instance's base feed.
-  if (S.community) q.set("community_name", S.community);
+  // Lemmy wants the bare short name ("memes") or "name@instance" -- the
+  // "c/memes" display form is NOT accepted (404), so strip it if typed.
+  if (S.community) q.set("community_name", S.community.replace(/^c\//, ""));
+  // Always ask for NSFW posts: many Lemmy instances (lemmy.world included)
+  // strip them from anonymous responses unless this flag is set. The N key
+  // then filters client-side (see the media filter below), so the toggle
+  // actually works in both directions.
+  q.set("show_nsfw", "true");
   q.set("sort", S.sort);
   q.set("limit", String(PAGE_SIZE));
   q.set("page", String(page));
