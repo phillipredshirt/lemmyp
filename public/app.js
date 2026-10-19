@@ -112,7 +112,9 @@ function buildShareUrl() {
 // ---- API -----------------------------------------------------------------
 async function fetchPosts(page, append) {
   const q = new URLSearchParams();
-  if (S.community) q.set("c", S.community);
+  // Lemmy post/list takes "community_name" (NOT "c") -- "c" is silently
+  // ignored upstream, so every sub would show the instance's base feed.
+  if (S.community) q.set("community_name", S.community);
   q.set("sort", S.sort);
   q.set("limit", String(PAGE_SIZE));
   q.set("page", String(page));
