@@ -161,6 +161,9 @@ async function fetchPosts(page, append) {
 function slideType(post) {
   const ct = post.url_content_type || "";
   const url = post.url || "";
+  // redgifs/redvids embed pages: render their own iframe player inline
+  // (the /ifr/ URL exists specifically to be embedded in an <iframe>).
+  if (/^https?:\/\/(www\.)?(redgifs|redvids)\.com\/(ifr|watch)\//i.test(url)) return "redgifs";
   if (ct.startsWith("image/")) return "image";
   if (ct.startsWith("video/")) return "video";
   // heuristic: common image/video extensions
@@ -200,6 +203,19 @@ function renderSlide() {
     vid.muted = !S.sound;
     vid.playsInline = true;
     box.appendChild(vid);
+  } else if (type === "redgifs") {
+    // redgifs /ifr/ embed page: render the site's own player.
+    // Loaded in the user's browser (not proxied), so redgifs' CDN/UA
+    // restrictions don't apply. Full box: the player manages its own size.
+    const frame = document.createElement("iframe");
+    // /watch/ is the page URL Lemmy JSON stores; /ifr/ is the
+    // frame-able embed — normalize to the embed form.
+    frame.src = post.url.replace(/\/watch\//, "/ifr/");
+    frame.className = "rg-frame";
+    frame.allowFullscreen = true;
+    frame.setAttribute("allow", "autoplay; fullscreen");
+    frame.referrerPolicy = "no-referrer";
+    box.appendChild(frame);
   } else {
     // link card
     const card = document.createElement("div");
@@ -491,15 +507,15 @@ function setupTouch() {
 // ---- mouse click to navigate (left/right halves) -------------------------
 function setupClick() {
   el.mediaBox.addEventListener("click", (e) => {
-    // don't navigate when interacting with a video or link-card
-    if (e.target.closest("video") || e.target.closest(".link-card")) return;
+    // don't navigate when interacting with a video, iframe, or link-card
+    if (e.target.closest("video") || e.target.tagName === "IFRAME" || e.target.closest(".link-card")) return;
     const half = window.innerWidth / 2;
     if (e.clientX > half) next(); else prev();
   });
 
   // double-click anywhere on the media = fullscreen
   el.mediaBox.addEventListener("dblclick", (e) => {
-    if (e.target.closest("video") || e.target.closest(".link-card")) return;
+    if (e.target.closest("video") || e.target.tagName === "IFRAME" || e.target.closest(".link-card")) return;
     toggleFullscreen();
   });
 }
