@@ -224,6 +224,23 @@ async function gifDuration(url) {
   } catch { return null; }
 }
 
+// ---- redgifs duration ---------------------------------------------
+// redgifs embeds are cross-origin iframes, so the player's duration can't
+// be read from our DOM. Their /ifr/ page, however, carries the length in an
+// og:video:duration meta tag, which our proxy can read - see /api/rg-duration.
+const rgDurCache = new Map(); // post url -> seconds (0 = unknown)
+
+async function rgDuration(postUrl) {
+  if (rgDurCache.has(postUrl)) return rgDurCache.get(postUrl);
+  let secs = 0;
+  try {
+    const r = await fetch(`/api/rg-duration?url=${encodeURIComponent(postUrl)}`);
+    if (r.ok) secs = (await r.json()).secs || 0;
+  } catch {}
+  rgDurCache.set(postUrl, secs);
+  return secs;
+}
+
 // ---- rendering -----------------------------------------------------------
 function renderSlide() {
   const box = el.mediaBox;
@@ -411,6 +428,25 @@ function scheduleAuto() {
       // base wait, push the pending timer out. (CORS failures just fall
       // back to the base delay.)
       gifDuration(url).then(d => {
+        if (!S.auto || !d) return;
+        const cur = S.slides[S.idx];
+        if (!cur || cur.post.url !== url) return; // slide changed in the meantime
+        const target = S.autoStart + Math.max(S.autoSec * 1000, d * 1000);
+        if (target > S.autoFireAt && target > Date.now()) {
+          S.autoFireAt = target;
+          S.autoTimer = setTimeout(autoAdvanceTick, target - Date.now());
+        }
+      });
+    }
+  } else if (type === "redgifs" && item) {
+    // Hold the slide for the full video length: ask the proxy for the
+    // duration and push the pending timer out if it beats the base wait.
+    const url = item.post.url;
+    const cached = rgDurCache.get(url);
+    if (cached) {
+      delay = Math.max(delay, cached * 1000);
+    } else {
+      rgDuration(url).then(d => {
         if (!S.auto || !d) return;
         const cur = S.slides[S.idx];
         if (!cur || cur.post.url !== url) return; // slide changed in the meantime

@@ -191,6 +191,35 @@ async function htmlFallback(instance, qs, cacheKey, res) {
 }
 
 // ---------------------------------------------------------------------------
+// Redgifs video duration:  /api/rg-duration?url=<embed page url>
+// ---------------------------------------------------------------------------
+// Auto-advance must know how long a redgifs video is to hold the slide until
+// it finishes. The redgifs v2 API needs a key (401), but the embed page's
+// <meta property="og:video:duration"> tag carries the length in seconds. A
+// video's duration never changes, so results are cached indefinitely.
+const rgDurCache = new Map(); // url -> seconds
+
+app.get("/api/rg-duration", async (req, res) => {
+  let u;
+  try { u = new URL(req.query.url || ""); } catch {
+    return res.status(400).json({ error: "bad url" });
+  }
+  const host = u.hostname.replace(/^www\./, "");
+  if (!["redgifs.com", "redvids.com"].includes(host) ||
+      !/^\/(ifr|watch)\//.test(u.pathname)) {
+    return res.status(400).json({ error: "not a redgifs embed url" });
+  }
+  const url = u.toString();
+  if (rgDurCache.has(url)) return res.json({ secs: rgDurCache.get(url) });
+  const page = await fetchHtml(url);
+  const m = page.body && page.body.match(/og:video:duration"\s+content="(\d+(?:\.\d+)?)/);
+  const secs = m ? Math.ceil(parseFloat(m[1])) : 0;
+  rgDurCache.set(url, secs);
+  if (rgDurCache.size > 1000) rgDurCache.delete(rgDurCache.keys().next().value);
+  res.json({ secs });
+});
+
+// ---------------------------------------------------------------------------
 // API proxy:  /api/:instance/*  →  https://:instance/api/v3/*
 // ---------------------------------------------------------------------------
 app.get("/api/:instance/*", (req, res) => {
