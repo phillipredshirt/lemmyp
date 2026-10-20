@@ -102,7 +102,14 @@ app.get("/api/:instance/*", (req, res) => {
           if (proxyRes.statusCode === 200) cacheSet(cacheKey, json);
           res.status(proxyRes.statusCode).json(json);
         } catch {
-          res.status(502).json({ error: `Invalid JSON from ${instance}` });
+          const ct = proxyRes.headers["content-type"] || "";
+          if (ct.includes("text/html") || /^\s*</.test(body)) {
+            res.status(502).json({
+              error: `${instance} returned a web page, not Lemmy API data — its hosting (PikaPods-style) blocks the JSON API. Ask the instance admin to expose /api/*, or use another instance.`,
+            });
+          } else {
+            res.status(502).json({ error: `Invalid JSON from ${instance}` });
+          }
         }
       });
     }

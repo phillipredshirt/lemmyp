@@ -54,7 +54,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
   transition:transform .25s,opacity .25s}
 #ctrl-bar.hide{transform:translateY(-100%);opacity:0;pointer-events:none}
 
-#ctrl-brand{font-weight:700;font-size:.92em;letter-spacing:.5px;color:var(--accent)}
+#ctrl-brand{font-weight:700;font-size:.92em;letter-spacing:.5px;color:var(--accent);text-decoration:none;cursor:pointer}
 #ctrl-context{font-size:.82em;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ctrl-spacer{flex:1}
 
