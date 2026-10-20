@@ -85,6 +85,8 @@ const el = {
   btnTitle:    $("btn-title"),
   btnNsfw:     $("btn-nsfw"),
   btnPost:     $("btn-post"),
+  btnPrev:     $("btn-prev"),
+  btnNext:     $("btn-next"),
   btnRetry:    $("btn-retry"),
 };
 
@@ -706,6 +708,8 @@ function setupButtons() {
   el.btnNsfw.onclick    = toggleNsfw;
   el.btnPost.onclick    = openPost;
   el.btnRetry.onclick   = () => { hideError(); startSlideshow(); };
+  el.btnPrev.onclick    = prev;
+  el.btnNext.onclick    = next;
 
   // NSFW button starts active (NSFW shown)
   el.btnNsfw.classList.add("active");

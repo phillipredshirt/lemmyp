@@ -17,6 +17,11 @@
     <div id="slide-media"></div>
     <!-- next-slide preload (off-screen) -->
     <div id="slide-next" aria-hidden="true"></div>
+    <!-- on-screen prev/next: on iOS Safari swipes are swallowed by
+         <video> (native scrub) and iframes, so touch devices get
+         always-tappable arrows on top of the media -->
+    <button id="btn-prev" class="nav-arrow" aria-label="Previous slide">❮</button>
+    <button id="btn-next" class="nav-arrow" aria-label="Next slide">❯</button>
   </div>
 
   <!-- top control bar -->
