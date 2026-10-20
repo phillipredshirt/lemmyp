@@ -44,6 +44,8 @@ const S = {
   loading:   false,
   auto:      false,
   autoTimer: null,
+  autoStart: 0,      // when the current slide's wait began
+  autoFireAt: 0,     // when the pending auto-advance timer will fire
   autoSec:   AUTO_DEFAULT,
   sound:     false,
   nsfwOn:    true,        // show NSFW by default
@@ -172,6 +174,56 @@ function slideType(post) {
   return "link";
 }
 
+function isGif(post) {
+  return (post.url_content_type || "") === "image/gif" ||
+         /\.gif($|[?#])/i.test(post.url || "");
+}
+
+// ---- GIF duration measurement --------------------------------------------
+// GIFs render as <img>, which doesn't expose their length. But the frame
+// delays live in the file header (GIF89a Graphic Control Extensions), so we
+// fetch the file and sum them. The <img> tag already loaded the same URL,
+// so this fetch normally hits the browser's HTTP cache. Cross-origin hosts
+// that block fetches make this fail - caller falls back to the base delay.
+const gifDurCache = new Map(); // url -> seconds
+
+async function gifDuration(url) {
+  if (gifDurCache.has(url)) return gifDurCache.get(url);
+  try {
+    const buf = new Uint8Array(await (await fetch(url)).arrayBuffer());
+    // header "GIF8" + logical screen descriptor
+    if (buf.length < 13 || buf[0] !== 0x47 || buf[1] !== 0x49 || buf[2] !== 0x46)
+      return null;
+    let i = 13;
+    if (buf[10] & 0x80) i += 3 << ((buf[10] & 0x70) >> 3); // global color table (2^N entries)
+    let secs = 0, pending = 0; // pending: delay (cs) from the most recent GCE
+    while (i < buf.length) {
+      const b = buf[i];
+      if (b === 0x3B) break; // trailer
+      if (b === 0x21) {      // extension block
+        if (buf[i + 1] === 0xF9) {  // graphic control extension (fixed 8 bytes)
+          pending = buf[i + 3] | (buf[i + 4] << 8);
+          i += 8;
+        } else {              // comment / app extension: skip data sub-blocks
+          i += 3;
+          while (i < buf.length && buf[i] !== 0) i += 1 + buf[i];
+          i += 1;
+        }
+      } else if (b === 0x2C) { // image descriptor = one frame
+        let j = i + 10;
+        if (buf[i + 9] & 0x80) j += 3 << ((buf[i + 9] & 0x70) >> 3); // LCT (2^N entries)
+        j += 1;                               // LZW minimum code size
+        while (j < buf.length && buf[j] !== 0) j += 1 + buf[j]; // image data blocks
+        secs += (pending > 0 ? pending : 10) / 100; // delay 0 -> 100ms default
+        pending = 0;
+        i = j + 1;
+      } else i += 1;
+    }
+    gifDurCache.set(url, secs);
+    return secs;
+  } catch { return null; }
+}
+
 // ---- rendering -----------------------------------------------------------
 function renderSlide() {
   const box = el.mediaBox;
@@ -202,6 +254,9 @@ function renderSlide() {
     vid.autoplay = true;
     vid.muted = !S.sound;
     vid.playsInline = true;
+    // duration is unknown until metadata loads; re-check it so a long
+    // video isn't cut off by the base auto-advance delay
+    vid.addEventListener("loadedmetadata", () => { if (S.auto) scheduleAuto(); });
     box.appendChild(vid);
   } else if (type === "redgifs") {
     // redgifs /ifr/ embed page: render the site's own player.
@@ -243,6 +298,7 @@ function renderSlide() {
 
   updateMeta();
   preloadNext();
+  if (S.auto) scheduleAuto(); // manual nav while auto is on: restart the wait
 }
 
 function updateMeta() {
@@ -323,19 +379,65 @@ async function maybePrefetch() {
 }
 
 // ---- auto-advance --------------------------------------------------------
+// Waits at least S.autoSec between slides, but never cuts a slide's media
+// short: a 10s GIF (or video) waits the full 10s even at a 5s setting.
+function autoAdvanceTick() {
+  if (!S.auto) return;
+  S.autoFireAt = 0;
+  next();
+  if (!S.auto) return; // navigation may have turned auto off
+  if (!S.hasMore && S.idx >= S.slides.length - 1) { toggleAuto(); return; }
+  scheduleAuto();
+}
+
+function scheduleAuto() {
+  clearTimeout(S.autoTimer);
+  if (!S.auto) return;
+  let delay = S.autoSec * 1000;
+
+  const item = S.slides[S.idx];
+  const type = item ? slideType(item.post) : null;
+  if (type === "video") {
+    const v = el.mediaBox.querySelector("video");
+    if (v && isFinite(v.duration) && v.duration > 0)
+      delay = Math.max(delay, v.duration * 1000);
+  } else if (type === "image" && item && isGif(item.post)) {
+    const url = item.post.url;
+    const cached = gifDurCache.get(url);
+    if (cached) {
+      delay = Math.max(delay, cached * 1000);
+    } else {
+      // Parse the GIF in the background; if it turns out longer than the
+      // base wait, push the pending timer out. (CORS failures just fall
+      // back to the base delay.)
+      gifDuration(url).then(d => {
+        if (!S.auto || !d) return;
+        const cur = S.slides[S.idx];
+        if (!cur || cur.post.url !== url) return; // slide changed in the meantime
+        const target = S.autoStart + Math.max(S.autoSec * 1000, d * 1000);
+        if (target > S.autoFireAt && target > Date.now()) {
+          S.autoFireAt = target;
+          S.autoTimer = setTimeout(autoAdvanceTick, target - Date.now());
+        }
+      });
+    }
+  }
+
+  S.autoStart = Date.now();
+  S.autoFireAt = S.autoStart + delay;
+  S.autoTimer = setTimeout(autoAdvanceTick, delay);
+}
+
 function toggleAuto() {
   S.auto = !S.auto;
   el.btnAuto.classList.toggle("active", S.auto);
   if (S.auto) {
-    S.autoTimer = setInterval(() => {
-      next();
-      if (!S.hasMore && S.idx >= S.slides.length - 1) {
-        toggleAuto(); // stop at end
-      }
-    }, S.autoSec * 1000);
+    scheduleAuto();
     el.autoTimer.textContent = `${S.autoSec}s`;
   } else {
-    clearInterval(S.autoTimer);
+    S.autoStart = 0;
+    S.autoFireAt = 0;
+    clearTimeout(S.autoTimer);
     el.autoTimer.textContent = "";
   }
 }
