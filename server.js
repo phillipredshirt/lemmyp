@@ -171,7 +171,10 @@ async function htmlFallback(instance, qs, cacheKey, res) {
     const community = (new URLSearchParams(qs).get("community_name") || "").replace(/^c\//, "");
     if (!community) throw new Error("no community_name");
     const communityName = community.split("@")[0];
-    const page = await fetchHtml(`https://${instance}/c/${encodeURIComponent(communityName)}`);
+    // layout=list: the instance's default masonry layout server-renders an
+    // EMPTY feed for some communities (e.g. redheads@fedinsfw.app), while the
+    // list layout always contains the full post markup.
+    const page = await fetchHtml(`https://${instance}/c/${encodeURIComponent(communityName)}?layout=list`);
     if (page.status !== 200 || !page.body || !page.body.includes(" post_teaser type_")) {
       throw new Error("community page not parseable");
     }
