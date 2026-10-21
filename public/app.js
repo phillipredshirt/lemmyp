@@ -10,6 +10,7 @@ const PREFETCH_AT = 4;  // fetch next page when this many slides remain
 
 const INSTANCES = [
   { id: "lemmy.world",         label: "lemmy.world" },
+  { id: "lemmynsfw.com",       label: "lemmynsfw.com" },
   { id: "sh.itjust.works",     label: "sh.itjust.works" },
   { id: "lemmy.ml",            label: "lemmy.ml" },
   { id: "feddit.ex.solar",     label: "feddit.ex.solar" },
