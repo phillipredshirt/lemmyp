@@ -6,6 +6,9 @@
 const DEFAULT_INSTANCE = "lemmy.world";
 const PAGE_SIZE = 25;
 const AUTO_DEFAULT = 5; // seconds
+// title-tag filter: global (one key for all communities/instances), persisted in localStorage
+const TAG_FILTER_KEY = "lemmyp.tagfilter";
+const TAG_FILTER_DEFAULT = "-t m>f"; // no [t], and no [m]-without-[f]
 const PREFETCH_AT = 4;  // fetch next page when this many slides remain
 
 const INSTANCES = [
@@ -53,6 +56,11 @@ const S = {
   titleVis:  true,
   ctrlVis:   true,
   lastMouse: Date.now(),
+  // title-tag filter (global, persisted)
+  filterExpr:  localStorage.getItem(TAG_FILTER_KEY) ?? TAG_FILTER_DEFAULT,
+  filter:      null,      // parsed; set in init()
+  hiddenCount: 0,         // posts dropped by the tag filter (loaded pages)
+  tagPanelOpen:false,
 };
 
 // ---- DOM shortcuts -------------------------------------------------------
@@ -89,6 +97,11 @@ const el = {
   btnPrev:     $("btn-prev"),
   btnNext:     $("btn-next"),
   btnRetry:    $("btn-retry"),
+  btnTags:     $("btn-tags"),
+  tagCount:    $("tag-count"),
+  tagPanel:    $("tag-panel"),
+  tagInput:    $("tag-input"),
+  tagHidden:   $("tag-hidden"),
 };
 
 // ---- URL parsing ---------------------------------------------------------
@@ -140,12 +153,14 @@ async function fetchPosts(page, append) {
   const data = await res.json();
   const posts = data.posts || [];
 
-  // keep only posts with a URL (skip text-only)
+  // keep only posts with a URL (skip text-only), apply NSFW + tag filters
+  let hidden = 0;
   const media = posts.filter(p => {
     const post = p.post;
     if (!post || post.deleted || post.removed) return false;
     if (!post.url) return false;
     if (S.nsfwOn === false && post.nsfw) return false;
+    if (!tagPasses(post.name)) { hidden++; return false; }
     return true;
   });
 
@@ -154,14 +169,17 @@ async function fetchPosts(page, append) {
     const existing = new Set(S.slides.map(s => s.post.id));
     const fresh = media.filter(p => !existing.has(p.post.id));
     S.slides.push(...fresh);
+    S.hiddenCount += hidden;
   } else {
     S.slides = media;
+    S.hiddenCount = hidden;
   }
   // >= (not ===): the HTML fallback (fedinsfw-style instances) returns a whole
   // server-rendered page (~85-100 posts) per request, not PAGE_SIZE. The JSON
   // API never returns more than `limit`, so >= is equivalent there.
   S.hasMore = posts.length >= PAGE_SIZE;
   S.page = page;
+  updateTagUI();
   return media.length;
 }
 
@@ -254,7 +272,7 @@ function renderSlide() {
   stopVideo();
 
   if (S.slides.length === 0) {
-    box.innerHTML = `<div style="color:var(--text-dim);font-size:1.1em">No media found<br><small>Try a different community or sort</small></div>`;
+    box.innerHTML = `<div style="color:var(--text-dim);font-size:1.1em">No media found<br><small>Try a different community or sort${S.filterExpr ? " · or clear the tag filter (Tags)" : ""}</small></div>`;
     updateMeta();
     return;
   }
@@ -512,6 +530,101 @@ function toggleNsfw() {
   startSlideshow();
 }
 
+// ---- title-tag filter ----------------------------------------------------
+// Extract every [bracketed] token from a title (any position), lowercased,
+// so [M]/[m] match. Returns a Set of tags.
+function extractTags(title) {
+  const tags = new Set();
+  if (!title) return tags;
+  const m = String(title).match(/\[[^\]]+\]/g);
+  if (m) for (const t of m) {
+    const inner = t.slice(1, -1).trim().toLowerCase();
+    if (inner) tags.add(inner);
+  }
+  return tags;
+}
+
+// Parse the mini-syntax into { required:[orGroups], blocked:[tags], rules:[[ant,cons]] }.
+//   +tag / +a|b   require tag / require (a or b)
+//   -tag / -a|b   block if tag present
+//   a>b / a>b|c   if a present, require (b or c)
+//   bare tag      = +tag
+function parseFilter(expr) {
+  const f = { required: [], blocked: [], rules: [] };
+  if (!expr) return f;
+  for (let tok of String(expr).trim().split(/\s+/)) {
+    if (!tok) continue;
+    if (tok[0] === "+") {
+      const g = tok.slice(1).split("|").map(t => t.trim().toLowerCase()).filter(Boolean);
+      if (g.length) f.required.push(g);
+    } else if (tok[0] === "-") {
+      for (const t of tok.slice(1).split("|")) {
+        const tag = t.trim().toLowerCase();
+        if (tag) f.blocked.push(tag);
+      }
+    } else if (tok.includes(">")) {
+      const [a, b] = tok.split(">");
+      const ant = a.trim().toLowerCase();
+      const cons = b.split("|").map(t => t.trim().toLowerCase()).filter(Boolean);
+      if (ant && cons.length) f.rules.push([ant, cons]);
+    } else {
+      const tag = tok.toLowerCase();
+      if (tag) f.required.push([tag]);
+    }
+  }
+  return f;
+}
+
+// Does a post title pass the current filter?
+function tagPasses(title) {
+  const f = S.filter;
+  if (!f) return true;
+  const tags = extractTags(title);
+  for (const g of f.required) if (!g.some(t => tags.has(t))) return false;
+  for (const t of f.blocked)  if (tags.has(t)) return false;
+  for (const [ant, cons] of f.rules) if (tags.has(ant) && !cons.some(t => tags.has(t))) return false;
+  return true;
+}
+
+function applyFilter(expr) {
+  S.filterExpr = expr == null ? "" : String(expr).trim();
+  S.filter = parseFilter(S.filterExpr);
+  try { localStorage.setItem(TAG_FILTER_KEY, S.filterExpr); } catch (e) {}
+  el.tagInput.value = S.filterExpr;
+  syncTagPresets();
+  updateTagUI();
+  // re-fetch from page 1 with the new filter (same path as the NSFW toggle)
+  startSlideshow();
+}
+
+function updateTagUI() {
+  el.btnTags.classList.toggle("active", S.filterExpr !== "");
+  el.btnTags.classList.toggle("has-hidden", S.hiddenCount > 0);
+  el.tagCount.textContent = S.hiddenCount > 0 ? String(S.hiddenCount) : "";
+  el.tagHidden.textContent = S.hiddenCount > 0 ? S.hiddenCount + " hidden by filter" : "no filter active";
+}
+
+function syncTagPresets() {
+  document.querySelectorAll(".tag-preset").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.expr === S.filterExpr);
+  });
+}
+
+function openTagPanel() {
+  S.tagPanelOpen = true;
+  el.tagPanel.classList.remove("hidden");
+  el.ctrlBar.classList.remove("hide");   // keep the bar (and panel) visible
+  el.tagInput.value = S.filterExpr;
+  syncTagPresets();
+}
+function closeTagPanel() {
+  S.tagPanelOpen = false;
+  el.tagPanel.classList.add("hidden");
+}
+function toggleTagPanel() {
+  if (S.tagPanelOpen) closeTagPanel(); else openTagPanel();
+}
+
 // ---- title / controls visibility -----------------------------------------
 function toggleTitle() {
   S.titleVis = !S.titleVis;
@@ -529,6 +642,7 @@ function onMouseMove() {
   if (S.titleVis) el.titleBar.classList.remove("hide");
 }
 setInterval(() => {
+  if (S.tagPanelOpen) return;   // keep the bar + panel visible while editing
   if (Date.now() - S.lastMouse > 3000) {
     if (S.ctrlVis)  el.ctrlBar.classList.add("hide");
     if (S.titleVis) el.titleBar.classList.add("hide");
@@ -566,12 +680,13 @@ async function startSlideshow() {
   S.page = 1;
   S.slides = [];
   S.hasMore = true;
+  S.hiddenCount = 0;
   S.lastMouse = Date.now();
 
   try {
     const count = await fetchPosts(1, false);
     if (count === 0) {
-      el.mediaBox.innerHTML = `<div style="color:var(--text-dim);font-size:1.1em">No media found<br><small>Try a different community or sort</small></div>`;
+      el.mediaBox.innerHTML = `<div style="color:var(--text-dim);font-size:1.1em">No media found<br><small>Try a different community or sort${S.filterExpr ? " · or clear the tag filter (Tags)" : ""}</small></div>`;
     } else {
       renderSlide();
     }
@@ -602,12 +717,14 @@ function setupKeys() {
         e.preventDefault(); prev(); break;
       case "Escape":
         if (document.fullscreenElement) return; // let browser handle
+        if (S.tagPanelOpen) { closeTagPanel(); break; }
         showSelector(); break;
       case "f": case "F": toggleFullscreen(); break;
       case "m": case "M": toggleSound(); break;
       case "t": case "T": toggleTitle(); break;
       case "a": case "A": toggleAuto(); break;
       case "n": case "N": toggleNsfw(); break;
+      case "g": case "G": toggleTagPanel(); break;
       case "o": case "O": openPost(); break;
       case "c": case "C": copyLink(); break;
       case "p": case "P": toggleControls(); break;
@@ -710,6 +827,7 @@ function setupButtons() {
   el.btnFull.onclick    = toggleFullscreen;
   el.btnTitle.onclick   = toggleTitle;
   el.btnNsfw.onclick    = toggleNsfw;
+  el.btnTags.onclick    = toggleTagPanel;
   el.btnPost.onclick    = openPost;
   el.btnRetry.onclick   = () => { hideError(); startSlideshow(); };
   el.btnPrev.onclick    = prev;
@@ -718,11 +836,30 @@ function setupButtons() {
   // NSFW button starts active (NSFW shown)
   el.btnNsfw.classList.add("active");
 
+  // tag filter: presets, text field, initial state
+  document.querySelectorAll(".tag-preset").forEach(btn => {
+    btn.onclick = () => applyFilter(btn.dataset.expr);
+  });
+  el.tagInput.addEventListener("change", () => applyFilter(el.tagInput.value));
+  el.tagInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); applyFilter(el.tagInput.value); el.tagInput.blur(); }
+  });
+  el.tagInput.value = S.filterExpr;
+  updateTagUI();
+
+  // close the panel on a click outside it (but not on the Tags button itself)
+  document.addEventListener("click", (e) => {
+    if (!S.tagPanelOpen) return;
+    if (e.target.closest("#tag-panel") || e.target.closest("#btn-tags")) return;
+    closeTagPanel();
+  });
+
   document.addEventListener("mousemove", onMouseMove, { passive: true });
 }
 
 // ---- init ----------------------------------------------------------------
 function init() {
+  S.filter = parseFilter(S.filterExpr);
   parseUrl();
   setupSelector();
   setupButtons();

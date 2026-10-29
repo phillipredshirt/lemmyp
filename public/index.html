@@ -35,8 +35,25 @@
     <button id="btn-full"    class="ctrl-btn" title="Fullscreen  [F]">⛶</button>
     <button id="btn-title"   class="ctrl-btn" title="Title  [T]">T</button>
     <button id="btn-nsfw"    class="ctrl-btn" title="Toggle NSFW filter  [N]">NSFW</button>
+    <button id="btn-tags"    class="ctrl-btn" title="Title-tag filter  [G]">Tags<span id="tag-count" class="tag-count"></span></button>
     <button id="btn-post"    class="ctrl-btn" title="Open post  [O]">Post&nbsp;↗</button>
     <span  id="slide-counter" class="ctrl-counter"></span>
+
+    <!-- title-tag filter panel: drops below the control bar (top:100% of #ctrl-bar) -->
+    <div id="tag-panel" class="hidden">
+      <div class="tag-row">
+        <button class="tag-preset" data-expr="">None</button>
+        <button class="tag-preset" data-expr="-t">No trans</button>
+        <button class="tag-preset" data-expr="m&gt;f">No male-only</button>
+        <button class="tag-preset" data-expr="-t m&gt;f">Default</button>
+        <button class="tag-preset" data-expr="+oc">OC only</button>
+      </div>
+      <input id="tag-input" type="text" placeholder="e.g. -t m&gt;f" autocomplete="off" spellcheck="false">
+      <div class="tag-status">
+        <span id="tag-hidden"></span>
+        <span class="tag-syntax">+tag require · -tag block · a&gt;b if-a-then-b · | = or · case-insensitive</span>
+      </div>
+    </div>
   </div>
 
   <!-- bottom title bar -->

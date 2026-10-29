@@ -84,6 +84,26 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
 .ctrl-timer{font-size:.75em;color:var(--text-dim);min-width:28px;text-align:center}
 .ctrl-counter{font-size:.78em;color:var(--text-dim);margin-left:4px}
 
+/* ---------- title-tag filter ---------- */
+#btn-tags .tag-count{display:none;margin-left:5px;font-size:.9em;font-weight:700;color:var(--accent)}
+#btn-tags.has-hidden .tag-count{display:inline-block}
+#tag-panel{position:absolute;top:100%;left:0;right:0;z-index:11;
+  padding:10px 14px 12px;background:var(--bar);border-bottom:1px solid var(--bar-border);
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  display:flex;flex-direction:column;gap:8px}
+.tag-row{display:flex;flex-wrap:wrap;gap:6px}
+.tag-preset{background:rgba(255,255,255,.08);border:1px solid transparent;border-radius:14px;
+  color:var(--text);font-size:.78em;padding:5px 12px;cursor:pointer;transition:background .15s}
+.tag-preset:hover{background:rgba(255,255,255,.16)}
+.tag-preset.active{background:rgba(124,158,255,.25);border-color:var(--accent)}
+#tag-input{width:100%;padding:8px 10px;border-radius:4px;border:1px solid #333;
+  background:#1a1a1a;color:var(--text);font-size:.9em;
+  font-family:ui-monospace,Menlo,Consolas,monospace}
+#tag-input:focus{outline:none;border-color:var(--accent)}
+.tag-status{display:flex;justify-content:space-between;gap:10px;font-size:.75em;color:var(--text-dim)}
+#tag-hidden{color:var(--accent);font-weight:600;white-space:nowrap}
+.tag-syntax{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
 /* ---------- title bar (bottom) ---------- */
 #title-bar{position:absolute;bottom:0;left:0;right:0;z-index:10;
   padding:10px 16px 14px;
