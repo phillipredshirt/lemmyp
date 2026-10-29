@@ -157,7 +157,10 @@ async function fetchPosts(page, append) {
   } else {
     S.slides = media;
   }
-  S.hasMore = posts.length === PAGE_SIZE;
+  // >= (not ===): the HTML fallback (fedinsfw-style instances) returns a whole
+  // server-rendered page (~85-100 posts) per request, not PAGE_SIZE. The JSON
+  // API never returns more than `limit`, so >= is equivalent there.
+  S.hasMore = posts.length >= PAGE_SIZE;
   S.page = page;
   return media.length;
 }

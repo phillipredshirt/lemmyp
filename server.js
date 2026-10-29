@@ -65,9 +65,11 @@ function cacheSet(key, data) {
 // HTML fallback: some instances (e.g. fedinsfw.app on PikaPods-style hosting)
 // block the /api/* JSON surface but still serve the server-rendered community
 // pages, so we scrape those for post/list. API-first: this only runs when the
-// JSON call comes back as HTML. The scraped page is page 1 in the instance's
-// default sort (Hot); the NSFW gate is bypassed, so every post carries its
-// real nsfw flag and the front-end filter still works both ways.
+// JSON call comes back as HTML. The server-rendered page honours ?page=N
+// (verified 2026-10-29: ~100 posts/page; pages past the end render only the
+// pinned post), so the fallback paginates like the JSON API. The NSFW gate is
+// bypassed, so every post carries its real nsfw flag and the front-end filter
+// still works both ways.
 // ---------------------------------------------------------------------------
 const BROWSER_HEADERS = {
   "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",
@@ -168,19 +170,27 @@ function parseCommunityPage(html, instance, communityName) {
 // keep the original specific 502 message as the last resort.
 async function htmlFallback(instance, qs, cacheKey, res) {
   try {
-    const community = (new URLSearchParams(qs).get("community_name") || "").replace(/^c\//, "");
+    const params = new URLSearchParams(qs);
+    const community = (params.get("community_name") || "").replace(/^c\//, "");
     if (!community) throw new Error("no community_name");
     const communityName = community.split("@")[0];
+    // ?page=N: the server-rendered page paginates (verified 2026-10-29).
+    // Without this the fallback always returned page 1, truncating any
+    // community bigger than one page (e.g. gonewild: 866 posts -> 85).
+    const pageNum = Math.max(1, parseInt(params.get("page") || "1", 10) || 1);
     // layout=list: the instance's default masonry layout server-renders an
     // EMPTY feed for some communities (e.g. redheads@fedinsfw.app), while the
     // list layout always contains the full post markup.
-    const page = await fetchHtml(`https://${instance}/c/${encodeURIComponent(communityName)}?layout=list`);
+    const page = await fetchHtml(`https://${instance}/c/${encodeURIComponent(communityName)}?layout=list&page=${pageNum}`);
     if (page.status !== 200 || !page.body || !page.body.includes(" post_teaser type_")) {
       throw new Error("community page not parseable");
     }
     const parsed = parseCommunityPage(page.body, instance, communityName);
-    if (!parsed.posts.length) throw new Error("no posts parsed");
-    console.log(`→ [html fallback] ${instance}/c/${communityName}: ${parsed.posts.length} posts`);
+    // An empty result is a valid end-of-feed signal: pages past the last render
+    // only the pinned post, which is dropped if it isn't media. Return an empty
+    // list (the front-end stops paginating) rather than erroring. A genuinely
+    // unparseable page is already caught by the marker check above.
+    console.log(`→ [html fallback] ${instance}/c/${communityName} p${pageNum}: ${parsed.posts.length} posts`);
     cacheSet(cacheKey, parsed);
     res.status(200).json(parsed);
   } catch {
