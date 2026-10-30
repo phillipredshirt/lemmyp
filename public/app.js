@@ -174,10 +174,14 @@ async function fetchPosts(page, append) {
     S.slides = media;
     S.hiddenCount = hidden;
   }
-  // >= (not ===): the HTML fallback (fedinsfw-style instances) returns a whole
-  // server-rendered page (~85-100 posts) per request, not PAGE_SIZE. The JSON
-  // API never returns more than `limit`, so >= is equivalent there.
-  S.hasMore = posts.length >= PAGE_SIZE;
+  // The HTML fallback (fedinsfw-style instances) reports has_more explicitly:
+  // a text-heavy community (e.g. microblogs) can yield fewer than PAGE_SIZE
+  // media posts per server-rendered page, which made the length heuristic
+  // stop early (microblogs truncated at ~61 of ~2700 posts). Real Lemmy
+  // post/list has no has_more field, so the heuristic stays for those.
+  S.hasMore = (typeof data.has_more === "boolean")
+    ? data.has_more
+    : posts.length >= PAGE_SIZE;
   S.page = page;
   updateTagUI();
   return media.length;

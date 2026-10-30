@@ -124,24 +124,43 @@ function parseCommunityPage(html, instance, communityName) {
     const g = (re) => { const m = block.match(re); return m ? m[1] : null; };
     const id = g(/id="post_(\d+)"/);
     if (!id) continue;
-    const href = g(/<a href="([^"]+)"\s+class="post_teaser_title_a"/);
-    const title = g(/class="post_teaser_title_a"\s*>([\s\S]*?)<\/a>/);
+    // Title anchor: match the WHOLE opening tag, not a fixed attribute order.
+    // Microblog posts carry extra attrs (e.g. rel="noindex") which used to
+    // fail the old tight regex and silently dropped most of their posts.
+    // One pass: anchor open tag (any attrs) + lazy title content.
+    const titleTag = block.match(/<a\b[^>]*class="post_teaser_title_a"[^>]*>([\s\S]*?)<\/a>/);
+    if (!titleTag) continue;
+    const href = (titleTag[0].match(/href="([^"]+)"/) || [])[1] || null;
+    const title = titleTag[1];
     if (!href || !title) continue;
-    const isVideo = block.includes("post_teaser type_4");
-    const isImage = block.includes("post_teaser type_3");
+    // Media: detect by PREVIEW block, not type_N — microblog posts use other
+    // type numbers (type_7 etc.) but render the identical preview markup.
+    const isVideo = block.includes("post_teaser_video_preview");
+    const isImage = block.includes("post_teaser_image_preview");
     if (!isImage && !isVideo) continue; // text/link posts have no media to show
     const author = g(/<a href="\/u\/([^/"]+)"/);
     const created = g(/<time datetime="([^"]+)"/);
     const score = g(/<span class="score"[^>]*>([^<]*)<\/span>/);
     const comments = g(/Number of comments: (\d+)/);
-    let url, thumbnail = null, contentType;
-    if (isImage) {
+    let url = null, thumbnail = null, contentType = null;
+    if (isVideo) {
+      // Two preview shapes: redgifs/redvids render an <iframe> embed page
+      // (front-end shows the site's own player via its url pattern);
+      // federated video (Mastodon & co.) renders <video><source src="...mp4">,
+      // which the front-end plays natively.
+      url = g(/post_teaser_video_preview[\s\S]*?<iframe[^>]*src="([^"]+)"/)
+        || g(/post_teaser_video_preview[\s\S]*?<source[^>]*src="([^"]+)"/)
+        || g(/post_teaser_video_preview[\s\S]*?<video[^>]*\bsrc="([^"]+)"/);
+      if (url) {
+        contentType = /redgifs\.com|redvids\.com/i.test(url)
+          ? "text/html"   // front-end picks its redgifs branch by URL
+          : "video/mp4";  // front-end renders a native <video>
+      }
+    }
+    if (!url && isImage) {
       url = g(/post_teaser_image_preview[\s\S]*?<a href="([^"]+)" class="post_link"/);
       thumbnail = g(/post_teaser_image_preview[\s\S]*?<img src="([^"]+)"/);
       contentType = "image/jpeg";
-    } else {
-      url = g(/post_teaser_video_preview[\s\S]*?<iframe[^>]*src="([^"]+)"/);
-      contentType = "text/html"; // front-end renders this as a link card
     }
     if (!url) continue;
     posts.push({
@@ -154,7 +173,7 @@ function parseCommunityPage(html, instance, communityName) {
         nsfw: block.includes("warning_badge nsfw"),
         ap_id: href.startsWith("/") ? `https://${instance}${href}` : href,
         community_name: communityName,
-        created_at: created || null,
+        created_at: created && created !== "None" ? created : null,
         removed: false,
         deleted: false,
       },
@@ -163,7 +182,7 @@ function parseCommunityPage(html, instance, communityName) {
       counters: { score: score ? +score : 0, comment_count: comments ? +comments : 0 },
     });
   }
-  return { posts };
+  return { posts, rawCount: marks.length };
 }
 
 // Scrape the community page when the JSON API is blocked; on any failure
@@ -182,17 +201,32 @@ async function htmlFallback(instance, qs, cacheKey, res) {
     // EMPTY feed for some communities (e.g. redheads@fedinsfw.app), while the
     // list layout always contains the full post markup.
     const page = await fetchHtml(`https://${instance}/c/${encodeURIComponent(communityName)}?layout=list&page=${pageNum}`);
-    if (page.status !== 200 || !page.body || !page.body.includes(" post_teaser type_")) {
+    if (page.status !== 200 || !page.body) {
+      throw new Error("community page not fetchable");
+    }
+    // A page past the end of the feed still returns 200 with the community
+    // shell (canonical link) but zero post markers — that is a valid empty
+    // feed, not an error. Nonexistent communities return a real 404, and any
+    // other 200 that isn't this community's page (gate/login/error) still
+    // throws below.
+    const isCommunityPage = page.body.includes(" post_teaser type_") ||
+      page.body.includes(`/c/${communityName}"`);
+    if (!isCommunityPage) {
       throw new Error("community page not parseable");
     }
     const parsed = parseCommunityPage(page.body, instance, communityName);
-    // An empty result is a valid end-of-feed signal: pages past the last render
-    // only the pinned post, which is dropped if it isn't media. Return an empty
-    // list (the front-end stops paginating) rather than erroring. A genuinely
-    // unparseable page is already caught by the marker check above.
-    console.log(`→ [html fallback] ${instance}/c/${communityName} p${pageNum}: ${parsed.posts.length} posts`);
-    cacheSet(cacheKey, parsed);
-    res.status(200).json(parsed);
+    // An empty result is a valid end-of-feed signal: pages past the last
+    // render only the pinned post (or nothing), which is dropped if it isn't
+    // media. Return an empty list (the front-end stops paginating) rather
+    // than erroring.
+    // A full page (fedinsfw renders 100 posts/page) means another page exists.
+    // The rendered "next" button is present even on the LAST page (it leads to
+    // a pinned-post-only page), so link presence is not a usable signal.
+    const hasMore = parsed.rawCount >= 95;
+    console.log(`→ [html fallback] ${instance}/c/${communityName} p${pageNum}: ${parsed.posts.length} posts (raw ${parsed.rawCount}, more=${hasMore})`);
+    const out = { posts: parsed.posts, has_more: hasMore };
+    cacheSet(cacheKey, out);
+    res.status(200).json(out);
   } catch {
     res.status(502).json({
       error: `${instance} returned a web page, not Lemmy API data — its hosting (PikaPods-style) blocks the JSON API. Ask the instance admin to expose /api/*, or use another instance.`,
