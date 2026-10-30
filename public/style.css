@@ -42,8 +42,11 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
 #slide-media iframe.rg-frame{width:100%;height:100%;border:0;background:#000;cursor:default}
 
 /* on-screen prev/next arrows (touch devices only) */
+/* prev/next arrows: shown on ALL browsers. On desktop the redgifs iframe
+   swallows mouse clicks and can trap keyboard focus, so these are the
+   guaranteed way to move between video slides (same as on touch devices). */
 .nav-arrow{position:absolute;top:50%;transform:translateY(-50%);z-index:15;
-  display:none;align-items:center;justify-content:center;
+  display:flex;align-items:center;justify-content:center;
   width:46px;height:96px;border:0;border-radius:10px;
   background:rgba(0,0,0,.30);color:#fff;font-size:1.7em;font-weight:300;
   cursor:pointer;-webkit-tap-highlight-color:transparent;
@@ -51,8 +54,8 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
 .nav-arrow:active{background:rgba(0,0,0,.6)}
 #btn-prev{left:4px}
 #btn-next{right:4px}
-@media(pointer:coarse){
-  .nav-arrow{display:flex}
+@media(hover:hover){
+  .nav-arrow:hover{background:rgba(0,0,0,.6)}
 }
 
 /* link-card for non-media posts */

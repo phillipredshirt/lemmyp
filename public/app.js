@@ -51,6 +51,7 @@ const S = {
   autoStart: 0,      // when the current slide's wait began
   autoFireAt: 0,     // when the pending auto-advance timer will fire
   autoSec:   AUTO_DEFAULT,
+  autoPicsOnly: localStorage.getItem("lemmyp.autopics") === "1", // auto skips images only; holds on videos
   sound:     false,
   nsfwOn:    true,        // show NSFW by default
   titleVis:  true,
@@ -88,6 +89,7 @@ const el = {
   selStart:    $("sel-start"),
   toast:       $("toast"),
   btnAuto:     $("btn-auto"),
+  btnPics:     $("btn-pics"),
   autoTimer:   $("auto-timer"),
   btnSound:    $("btn-sound"),
   btnFull:     $("btn-full"),
@@ -343,6 +345,7 @@ function renderSlide() {
 
   updateMeta();
   preloadNext();
+  holdToastId = null; // allow the pics-only hold toast to fire once for this slide
   if (S.auto) scheduleAuto(); // manual nav while auto is on: restart the wait
 }
 
@@ -438,10 +441,26 @@ function autoAdvanceTick() {
 function scheduleAuto() {
   clearTimeout(S.autoTimer);
   if (!S.auto) return;
-  let delay = S.autoSec * 1000;
 
   const item = S.slides[S.idx];
   const type = item ? slideType(item.post) : null;
+
+  // Pics-only option: auto-advance only skips images. A video (native or
+  // redgifs embed) holds indefinitely until the user advances it, so the
+  // clip plays in full. renderSlide() re-schedules on every slide change,
+  // so moving to an image re-arms the timer automatically.
+  if (S.autoPicsOnly && (type === "video" || type === "redgifs")) {
+    S.autoTimer = null;
+    S.autoFireAt = 0;
+    S.autoStart = 0;
+    if (holdToastId !== item.post.id) {
+      holdToastId = item.post.id;
+      toast("Pics-only: holding on video — press → or ❯ to continue", 3500);
+    }
+    return;
+  }
+
+  let delay = S.autoSec * 1000;
   if (type === "video") {
     const v = el.mediaBox.querySelector("video");
     if (v && isFinite(v.duration) && v.duration > 0)
@@ -504,6 +523,32 @@ function toggleAuto() {
     clearTimeout(S.autoTimer);
     el.autoTimer.textContent = "";
   }
+}
+
+// Pics-only: auto advances images only; videos hold until advanced, so
+// they play in full. Persisted globally in localStorage.
+let holdToastId = null; // post id the hold toast was already shown for
+
+function toggleAutoPicsOnly() {
+  S.autoPicsOnly = !S.autoPicsOnly;
+  el.btnPics.classList.toggle("active", S.autoPicsOnly);
+  try { localStorage.setItem("lemmyp.autopics", S.autoPicsOnly ? "1" : "0"); } catch (e) {}
+  toast(S.autoPicsOnly
+    ? "Pics-only on: auto advances pictures, holds on videos"
+    : "Pics-only off: auto advances every slide");
+  if (S.auto) scheduleAuto(); // re-evaluate: hold now, or re-arm the timer
+}
+
+// ---- focus guard ---------------------------------------------------------
+// Clicking the redgifs player (or a <video>) moves DOM focus into that
+// element's own document; after switching OS windows and back, keys keep
+// going in there and the app's shortcuts die (only the Auto button worked).
+// When the window regains focus, hand keyboard focus back to this document.
+function setupFocusGuard() {
+  window.addEventListener("focus", () => {
+    const a = document.activeElement;
+    if (a && a.tagName === "IFRAME") a.blur();
+  });
 }
 
 // ---- fullscreen ----------------------------------------------------------
@@ -727,6 +772,7 @@ function setupKeys() {
       case "m": case "M": toggleSound(); break;
       case "t": case "T": toggleTitle(); break;
       case "a": case "A": toggleAuto(); break;
+      case "v": case "V": toggleAutoPicsOnly(); break;
       case "n": case "N": toggleNsfw(); break;
       case "g": case "G": toggleTagPanel(); break;
       case "o": case "O": openPost(); break;
@@ -827,6 +873,7 @@ window.addEventListener("popstate", () => {
 // ---- button wiring -------------------------------------------------------
 function setupButtons() {
   el.btnAuto.onclick    = toggleAuto;
+  el.btnPics.onclick    = toggleAutoPicsOnly;
   el.btnSound.onclick   = toggleSound;
   el.btnFull.onclick    = toggleFullscreen;
   el.btnTitle.onclick   = toggleTitle;
@@ -839,6 +886,7 @@ function setupButtons() {
 
   // NSFW button starts active (NSFW shown)
   el.btnNsfw.classList.add("active");
+  el.btnPics.classList.toggle("active", S.autoPicsOnly);
 
   // tag filter: presets, text field, initial state
   document.querySelectorAll(".tag-preset").forEach(btn => {
@@ -870,6 +918,7 @@ function init() {
   setupKeys();
   setupTouch();
   setupClick();
+  setupFocusGuard();
 
   if (S.community) {
     startSlideshow();
