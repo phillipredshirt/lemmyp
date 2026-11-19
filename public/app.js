@@ -834,19 +834,28 @@ async function jumpBack(amount, unit) {
       }
       if (!best) best = hiInfo;   // range was a single page
       if (best.posts.length > 0 && isFinite(best.oldest)) {
-        let startIdx = best.posts.length;   // first post at-or-before the target
-        for (let i = 0; i < best.posts.length; i++) { if (postTime(best.posts[i].post) <= target) { startIdx = i; break; } }
-        const { media, hidden } = mediaFilter(best.posts.slice(startIdx));
-        found = { page: best.page, media, hidden, hasMore: best.hasMore };
+        // Keep the ENTIRE found page, not just posts at-or-before the target:
+        // the newer posts stay in the list so the left arrow can walk back
+        // through them (and, at the head, load page N-1 via loadPrevPage).
+        // Slicing them off made every post newer than the target unreachable
+        // — the jump behaved like "new array with the jump point at zero",
+        // which is exactly what it was (S.slides = slice, S.idx = 0).
+        const { media, hidden } = mediaFilter(best.posts);
+        let startIdx = media.length;   // first MEDIA post at-or-before the target
+        for (let i = 0; i < media.length; i++) { if (postTime(media[i].post) <= target) { startIdx = i; break; } }
+        found = { page: best.page, media, hidden, hasMore: best.hasMore, startIdx };
       }
     }
 
     if (found) {
       S.slides = found.media; S.hiddenCount = found.hidden;
-      S.page = found.page; S.hasMore = found.hasMore; S.idx = 0;
+      S.page = found.page; S.hasMore = found.hasMore;
+      // startIdx can equal media.length when the page's only at-or-before
+      // posts were text-only: clamp to the oldest media post on the page
+      S.idx = S.slides.length ? Math.min(found.startIdx, S.slides.length - 1) : 0;
       // show the ACTUAL start post's date, not the target: in sparse
       // communities the first post at-or-before the target can be much older
-      const startT = found.media.length ? postTime(found.media[0].post) : 0;
+      const startT = S.slides.length ? postTime(S.slides[S.idx].post) : 0;
       const label = new Date(startT || target).toLocaleDateString();
       el.jumpStatus.textContent = "started " + label;
       toast(`Started ${label}`);
