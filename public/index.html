@@ -37,6 +37,7 @@
     <button id="btn-title"   class="ctrl-btn" title="Title  [T]">T</button>
     <button id="btn-nsfw"    class="ctrl-btn" title="Toggle NSFW filter  [N]">NSFW</button>
     <button id="btn-tags"    class="ctrl-btn" title="Title-tag filter  [G]">Tags<span id="tag-count" class="tag-count"></span></button>
+    <button id="btn-jump"    class="ctrl-btn" title="Jump back in time  [J]">Jump&nbsp;▾</button>
     <button id="btn-post"    class="ctrl-btn" title="Open post  [O]">Post&nbsp;↗</button>
     <span  id="slide-counter" class="ctrl-counter"></span>
 
@@ -53,6 +54,32 @@
       <div class="tag-status">
         <span id="tag-hidden"></span>
         <span class="tag-syntax">+tag require · -tag block · a&gt;b if-a-then-b · | = or · case-insensitive</span>
+      </div>
+    </div>
+
+    <!-- jump-back panel: drops below the control bar (New sort only) -->
+    <div id="jump-panel" class="hidden">
+      <div class="tag-row">
+        <button class="tag-preset jump-preset" data-amt="1" data-unit="d">1d</button>
+        <button class="tag-preset jump-preset" data-amt="3" data-unit="d">3d</button>
+        <button class="tag-preset jump-preset" data-amt="1" data-unit="w">1w</button>
+        <button class="tag-preset jump-preset" data-amt="2" data-unit="w">2w</button>
+        <button class="tag-preset jump-preset" data-amt="1" data-unit="mo">1mo</button>
+        <button class="tag-preset jump-preset" data-amt="3" data-unit="mo">3mo</button>
+        <button class="tag-preset" id="jump-top">Top</button>
+      </div>
+      <div class="jump-custom">
+        <input id="jump-amt" type="number" min="1" step="1" value="1" inputmode="numeric">
+        <select id="jump-unit">
+          <option value="d">days</option>
+          <option value="w">weeks</option>
+          <option value="mo">months</option>
+        </select>
+        <button id="jump-go" class="ctrl-btn">Go</button>
+      </div>
+      <div class="tag-status">
+        <span id="jump-status"></span>
+        <span class="tag-syntax">New sort only · jumps before viewing · months ≈ 30 days</span>
       </div>
     </div>
   </div>

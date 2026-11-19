@@ -10,6 +10,10 @@ const AUTO_DEFAULT = 5; // seconds
 const TAG_FILTER_KEY = "lemmyp.tagfilter";
 const TAG_FILTER_DEFAULT = "-t m>f"; // no [t], and no [m]-without-[f]
 const PREFETCH_AT = 4;  // fetch next page when this many slides remain
+// jump-back (New sort only): binary-search New pages for a target time.
+// The seek uses the same PAGE_SIZE as the normal feed, so page numbers line
+// up and forward pagination continues seamlessly from the found page.
+const JUMP_MAX_PAGES = 2000; // search depth cap (2000 * PAGE_SIZE posts)
 
 const INSTANCES = [
   { id: "lemmy.world",         label: "lemmy.world" },
@@ -62,6 +66,8 @@ const S = {
   filter:      null,      // parsed; set in init()
   hiddenCount: 0,         // posts dropped by the tag filter (loaded pages)
   tagPanelOpen:false,
+  jumpPanelOpen:false,
+  jumping:     false,     // a jump-back seek is in flight
 };
 
 // ---- DOM shortcuts -------------------------------------------------------
@@ -104,6 +110,12 @@ const el = {
   tagPanel:    $("tag-panel"),
   tagInput:    $("tag-input"),
   tagHidden:   $("tag-hidden"),
+  btnJump:     $("btn-jump"),
+  jumpPanel:   $("jump-panel"),
+  jumpAmt:     $("jump-amt"),
+  jumpUnit:    $("jump-unit"),
+  jumpGo:      $("jump-go"),
+  jumpStatus:  $("jump-status"),
 };
 
 // ---- URL parsing ---------------------------------------------------------
@@ -156,15 +168,7 @@ async function fetchPosts(page, append) {
   const posts = data.posts || [];
 
   // keep only posts with a URL (skip text-only), apply NSFW + tag filters
-  let hidden = 0;
-  const media = posts.filter(p => {
-    const post = p.post;
-    if (!post || post.deleted || post.removed) return false;
-    if (!post.url) return false;
-    if (S.nsfwOn === false && post.nsfw) return false;
-    if (!tagPasses(post.name)) { hidden++; return false; }
-    return true;
-  });
+  const { media, hidden } = mediaFilter(posts);
 
   if (append) {
     // de-dupe by post id
@@ -187,6 +191,55 @@ async function fetchPosts(page, append) {
   S.page = page;
   updateTagUI();
   return media.length;
+}
+
+// ---- media / NSFW / tag filter (shared by normal load and jump-back) -----
+function mediaFilter(posts) {
+  let hidden = 0;
+  const media = posts.filter(p => {
+    const post = p.post;
+    if (!post || post.deleted || post.removed) return false;
+    if (!post.url) return false;
+    if (S.nsfwOn === false && post.nsfw) return false;
+    if (!tagPasses(post.name)) { hidden++; return false; }
+    return true;
+  });
+  return { media, hidden };
+}
+
+// post timestamp in ms: real API -> published (unix seconds on some instances,
+// ISO string on others, e.g. lemmy.world); HTML fallback -> created_at (ISO)
+function postTime(post) {
+  if (!post) return 0;
+  if (typeof post.published === "number") return post.published * 1000;
+  if (typeof post.published === "string") {
+    const s = post.published.trim();
+    if (/^\d+$/.test(s)) return parseInt(s, 10) * 1000;
+    const t = new Date(s).getTime(); if (!isNaN(t)) return t;
+  }
+  if (post.created_at) { const t = new Date(post.created_at).getTime(); if (!isNaN(t)) return t; }
+  return 0;
+}
+
+// raw (unfiltered) post/list page for the jump-back seek — same query shape
+// as fetchPosts (PAGE_SIZE) so page numbers line up with forward pagination
+async function fetchRawPage(page) {
+  const q = new URLSearchParams();
+  if (S.community) q.set("community_name", S.community.replace(/^c\//, ""));
+  q.set("show_nsfw", "true");
+  q.set("sort", "New");
+  q.set("limit", String(PAGE_SIZE));
+  q.set("page", String(page));
+  const res = await fetch(`/api/${S.instance}/post/list?${q}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `HTTP ${res.status}`);
+  }
+  return await res.json();
+}
+
+function dataHasMore(data, posts) {
+  return (typeof data.has_more === "boolean") ? data.has_more : posts.length >= PAGE_SIZE;
 }
 
 // ---- slide type detection ------------------------------------------------
@@ -674,6 +727,146 @@ function toggleTagPanel() {
   if (S.tagPanelOpen) closeTagPanel(); else openTagPanel();
 }
 
+// ---- jump back in time (New sort only) -----------------------------------
+// One-shot seek before viewing: target = now - amount*unit. New pages go
+// newest -> oldest, so binary-search (exponential probe, then halving) for
+// the first page whose oldest post is at-or-before the target, and start the
+// slide list at the first such post. Forward pagination then continues
+// further back as usual. Presets fill the custom amount+unit.
+async function jumpBack(amount, unit) {
+  if (S.sort !== "New") { toast("Jump back works with the New sort"); return; }
+  if (S.jumping) return;
+  const unitMs = { d: 86400000, w: 7 * 86400000, mo: 30 * 86400000 }[unit];
+  if (!unitMs) return;
+  const target = Date.now() - amount * unitMs;
+
+  S.jumping = true;
+  closeJumpPanel();
+  // a manual seek: stop auto-advance so it doesn't fire on stale slides
+  if (S.auto) { S.auto = false; clearTimeout(S.autoTimer); S.autoTimer = null; el.btnAuto.classList.remove("active"); el.autoTimer.textContent = ""; }
+  showLoading(true);
+  hideError();
+  stopVideo();
+  el.mediaBox.innerHTML = "";
+  el.jumpStatus.textContent = "jumping…";
+
+  // one New page; page 1 starts with pinned posts (out of time order), which
+  // are dropped so they can't fool the seek
+  async function pageInfo(p) {
+    const data = await fetchRawPage(p);
+    const raw = data.posts || [];
+    let posts = raw;
+    if (p === 1) {
+      let skip = 0;
+      for (let i = 0; i < posts.length - 1; i++) {
+        const a = postTime(posts[i].post), b = postTime(posts[i + 1].post);
+        if (a > 0 && b > 0 && a < b) skip = i + 1; else break;
+      }
+      posts = posts.slice(skip);
+    }
+    let oldest = Infinity;
+    for (const it of posts) { const t = postTime(it.post); if (t > 0 && t < oldest) oldest = t; }
+    // hasMore from the RAW count: pinned-skip must not shrink a full page below PAGE_SIZE
+    return { page: p, posts, oldest, hasMore: dataHasMore(data, raw) };
+  }
+
+  let found = null, oldestAvail = null, capped = false;
+  try {
+    // probe: double the page until it is empty, or its oldest post is
+    // at-or-before the target (lo = last page known to be newer than target)
+    let lo = 0, hi = 1, hiInfo = null;
+    for (;;) {
+      hiInfo = await pageInfo(hi);
+      el.jumpStatus.textContent = "jumping… page " + hi;
+      if (hiInfo.posts.length === 0) { hiInfo = null; break; }   // ran past the end of the feed
+      oldestAvail = hiInfo;                                      // last non-empty page seen
+      if (!isFinite(hiInfo.oldest)) break;                       // no timestamps -> can't seek
+      if (hiInfo.oldest <= target) break;                        // target lies in (lo..hi]
+      if (hi >= JUMP_MAX_PAGES) { capped = true; break; }        // search depth cap
+      lo = hi;
+      hi = Math.min(hi * 2, JUMP_MAX_PAGES);
+    }
+
+    if (hiInfo && isFinite(hiInfo.oldest) && hiInfo.oldest <= target) {
+      // binary-search (lo..hi] for the first page whose oldest post is at-or-before target
+      let a = lo + 1, b = hi, best = null;
+      while (a < b) {
+        const mid = (a + b) >> 1;
+        const info = await pageInfo(mid);
+        el.jumpStatus.textContent = "jumping… page " + mid;
+        if (info.posts.length > 0 && isFinite(info.oldest) && info.oldest > target) a = mid + 1;
+        else { best = info; b = mid; }
+      }
+      if (!best) best = hiInfo;   // range was a single page
+      if (best.posts.length > 0 && isFinite(best.oldest)) {
+        let startIdx = best.posts.length;   // first post at-or-before the target
+        for (let i = 0; i < best.posts.length; i++) { if (postTime(best.posts[i].post) <= target) { startIdx = i; break; } }
+        const { media, hidden } = mediaFilter(best.posts.slice(startIdx));
+        found = { page: best.page, media, hidden, hasMore: best.hasMore };
+      }
+    }
+
+    if (found) {
+      S.slides = found.media; S.hiddenCount = found.hidden;
+      S.page = found.page; S.hasMore = found.hasMore; S.idx = 0;
+      // show the ACTUAL start post's date, not the target: in sparse
+      // communities the first post at-or-before the target can be much older
+      const startT = found.media.length ? postTime(found.media[0].post) : 0;
+      const label = new Date(startT || target).toLocaleDateString();
+      el.jumpStatus.textContent = "started " + label;
+      toast(`Started ${label}`);
+    } else if (capped) {
+      // target is deeper than the search cap: start at the deepest page found
+      const { media, hidden } = mediaFilter(oldestAvail.posts);
+      S.slides = media; S.hiddenCount = hidden;
+      S.page = oldestAvail.page; S.hasMore = oldestAvail.hasMore; S.idx = 0;
+      el.jumpStatus.textContent = "search limit (page " + oldestAvail.page + ")";
+      toast("Target is deeper than the search limit — started at page " + oldestAvail.page);
+    } else if (oldestAvail) {
+      const { media, hidden } = mediaFilter(oldestAvail.posts);
+      S.slides = media; S.hiddenCount = hidden;
+      S.page = oldestAvail.page; S.hasMore = oldestAvail.hasMore; S.idx = 0;
+      if (!isFinite(oldestAvail.oldest)) {
+        el.jumpStatus.textContent = "no timestamps";
+        toast("Posts have no timestamps — starting from newest");
+      } else {
+        el.jumpStatus.textContent = "oldest available";
+        toast("Reached the oldest available posts");
+      }
+    } else {
+      S.slides = []; S.hiddenCount = 0; S.page = 1; S.hasMore = false; S.idx = 0;
+      el.jumpStatus.textContent = "no posts";
+    }
+    renderSlide();
+  } catch (err) {
+    showError(`Jump failed: ${err.message}`);
+  } finally {
+    showLoading(false);
+    S.jumping = false;
+  }
+}
+
+function openJumpPanel() {
+  S.jumpPanelOpen = true;
+  el.jumpPanel.classList.remove("hidden");
+  el.ctrlBar.classList.remove("hide");
+  updateJumpUI();
+}
+function closeJumpPanel() {
+  S.jumpPanelOpen = false;
+  el.jumpPanel.classList.add("hidden");
+}
+function toggleJumpPanel() {
+  if (S.jumpPanelOpen) { closeJumpPanel(); return; }
+  if (S.sort !== "New") { toast("Jump back works with the New sort"); return; }
+  openJumpPanel();
+}
+function updateJumpUI() {
+  const enabled = S.sort === "New";
+  el.btnJump.classList.toggle("disabled", !enabled);
+  el.btnJump.title = enabled ? "Jump back in time  [J]" : "Jump back in time (New sort only)";
+}
+
 // ---- title / controls visibility -----------------------------------------
 function toggleTitle() {
   S.titleVis = !S.titleVis;
@@ -691,7 +884,7 @@ function onMouseMove() {
   if (S.titleVis) el.titleBar.classList.remove("hide");
 }
 setInterval(() => {
-  if (S.tagPanelOpen) return;   // keep the bar + panel visible while editing
+  if (S.tagPanelOpen || S.jumpPanelOpen) return;   // keep the bar + panel visible while editing
   if (Date.now() - S.lastMouse > 3000) {
     if (S.ctrlVis)  el.ctrlBar.classList.add("hide");
     if (S.titleVis) el.titleBar.classList.add("hide");
@@ -731,6 +924,8 @@ async function startSlideshow() {
   S.hasMore = true;
   S.hiddenCount = 0;
   S.lastMouse = Date.now();
+  closeJumpPanel();
+  updateJumpUI();
 
   try {
     const count = await fetchPosts(1, false);
@@ -767,6 +962,7 @@ function setupKeys() {
       case "Escape":
         if (document.fullscreenElement) return; // let browser handle
         if (S.tagPanelOpen) { closeTagPanel(); break; }
+        if (S.jumpPanelOpen) { closeJumpPanel(); break; }
         showSelector(); break;
       case "f": case "F": toggleFullscreen(); break;
       case "m": case "M": toggleSound(); break;
@@ -775,6 +971,7 @@ function setupKeys() {
       case "v": case "V": toggleAutoPicsOnly(); break;
       case "n": case "N": toggleNsfw(); break;
       case "g": case "G": toggleTagPanel(); break;
+      case "j": case "J": toggleJumpPanel(); break;
       case "o": case "O": openPost(); break;
       case "c": case "C": copyLink(); break;
       case "p": case "P": toggleControls(); break;
@@ -879,6 +1076,7 @@ function setupButtons() {
   el.btnTitle.onclick   = toggleTitle;
   el.btnNsfw.onclick    = toggleNsfw;
   el.btnTags.onclick    = toggleTagPanel;
+  el.btnJump.onclick    = toggleJumpPanel;
   el.btnPost.onclick    = openPost;
   el.btnRetry.onclick   = () => { hideError(); startSlideshow(); };
   el.btnPrev.onclick    = prev;
@@ -899,11 +1097,30 @@ function setupButtons() {
   el.tagInput.value = S.filterExpr;
   updateTagUI();
 
-  // close the panel on a click outside it (but not on the Tags button itself)
+  // jump-back: presets fill the custom amount+unit and fire; Top resets to newest
+  document.querySelectorAll(".jump-preset").forEach(btn => {
+    btn.onclick = () => {
+      const amt = Math.max(1, parseInt(btn.dataset.amt, 10) || 1);
+      const unit = btn.dataset.unit || "d";
+      el.jumpAmt.value = amt;
+      el.jumpUnit.value = unit;
+      jumpBack(amt, unit);
+    };
+  });
+  $("jump-top").onclick = () => startSlideshow();
+  el.jumpGo.onclick = () => {
+    const amt = Math.max(1, parseInt(el.jumpAmt.value, 10) || 1);
+    jumpBack(amt, el.jumpUnit.value || "d");
+  };
+  el.jumpAmt.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); el.jumpGo.click(); }
+  });
+  updateJumpUI();
+
+  // close a panel on a click outside it (but not on its own toggle button)
   document.addEventListener("click", (e) => {
-    if (!S.tagPanelOpen) return;
-    if (e.target.closest("#tag-panel") || e.target.closest("#btn-tags")) return;
-    closeTagPanel();
+    if (S.tagPanelOpen && !(e.target.closest("#tag-panel") || e.target.closest("#btn-tags"))) closeTagPanel();
+    if (S.jumpPanelOpen && !(e.target.closest("#jump-panel") || e.target.closest("#btn-jump"))) closeJumpPanel();
   });
 
   document.addEventListener("mousemove", onMouseMove, { passive: true });
