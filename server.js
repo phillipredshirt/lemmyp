@@ -74,7 +74,14 @@ function cacheSet(key, data) {
 const BROWSER_HEADERS = {
   "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",
   Accept: "text/html,application/xhtml+xml",
-  Cookie: "anoobis2=ok; warned=yes",
+  // warned=yes bypasses the age gate. anoobis2/anoobis3 are Anubis proof-of-work
+  // pass cookies: the server only checks for their PRESENCE (the PoW is a pure
+  // client-side delay and the cookie value is ignored — verified 2026-11-19 that
+  // anoobis3=garbage still passes). fedinsfw moved from Anubis v2 to v3 in Nov
+  // 2026, so the old anoobis2-only cookie started getting the challenge page and
+  // every community came back "No media found". Send both so the scraper works on
+  // instances running either Anubis version.
+  Cookie: "anoobis2=ok; anoobis3=ok; warned=yes",
 };
 
 function fetchHtml(url, redirects = 5) {
