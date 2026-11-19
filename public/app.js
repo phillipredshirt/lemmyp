@@ -67,6 +67,7 @@ const S = {
   hiddenCount: 0,         // posts dropped by the tag filter (loaded pages)
   tagPanelOpen:false,
   jumpPanelOpen:false,
+  helpPanelOpen:false,
   jumping:     false,     // a jump-back seek is in flight
 };
 
@@ -116,6 +117,8 @@ const el = {
   jumpUnit:    $("jump-unit"),
   jumpGo:      $("jump-go"),
   jumpStatus:  $("jump-status"),
+  btnHelp:     $("btn-help"),
+  helpPanel:   $("help-panel"),
 };
 
 // ---- URL parsing ---------------------------------------------------------
@@ -911,6 +914,20 @@ function updateJumpUI() {
   el.btnJump.title = enabled ? "Jump back in time  [J]" : "Jump back in time (New sort only)";
 }
 
+// ---- help panel ----------------------------------------------------------
+function openHelpPanel() {
+  S.helpPanelOpen = true;
+  el.helpPanel.classList.remove("hidden");
+  el.ctrlBar.classList.remove("hide");
+}
+function closeHelpPanel() {
+  S.helpPanelOpen = false;
+  el.helpPanel.classList.add("hidden");
+}
+function toggleHelpPanel() {
+  if (S.helpPanelOpen) closeHelpPanel(); else openHelpPanel();
+}
+
 // ---- title / controls visibility -----------------------------------------
 function toggleTitle() {
   S.titleVis = !S.titleVis;
@@ -928,7 +945,7 @@ function onMouseMove() {
   if (S.titleVis) el.titleBar.classList.remove("hide");
 }
 setInterval(() => {
-  if (S.tagPanelOpen || S.jumpPanelOpen) return;   // keep the bar + panel visible while editing
+  if (S.tagPanelOpen || S.jumpPanelOpen || S.helpPanelOpen) return;   // keep the bar + panel visible while editing
   if (Date.now() - S.lastMouse > 3000) {
     if (S.ctrlVis)  el.ctrlBar.classList.add("hide");
     if (S.titleVis) el.titleBar.classList.add("hide");
@@ -1007,6 +1024,7 @@ function setupKeys() {
         if (document.fullscreenElement) return; // let browser handle
         if (S.tagPanelOpen) { closeTagPanel(); break; }
         if (S.jumpPanelOpen) { closeJumpPanel(); break; }
+        if (S.helpPanelOpen) { closeHelpPanel(); break; }
         showSelector(); break;
       case "f": case "F": toggleFullscreen(); break;
       case "m": case "M": toggleSound(); break;
@@ -1016,6 +1034,7 @@ function setupKeys() {
       case "n": case "N": toggleNsfw(); break;
       case "g": case "G": toggleTagPanel(); break;
       case "j": case "J": toggleJumpPanel(); break;
+      case "h": case "H": toggleHelpPanel(); break;
       case "o": case "O": openPost(); break;
       case "c": case "C": copyLink(); break;
       case "p": case "P": toggleControls(); break;
@@ -1121,6 +1140,7 @@ function setupButtons() {
   el.btnNsfw.onclick    = toggleNsfw;
   el.btnTags.onclick    = toggleTagPanel;
   el.btnJump.onclick    = toggleJumpPanel;
+  el.btnHelp.onclick    = toggleHelpPanel;
   el.btnPost.onclick    = openPost;
   el.btnRetry.onclick   = () => { hideError(); startSlideshow(); };
   el.btnPrev.onclick    = prev;
@@ -1165,6 +1185,7 @@ function setupButtons() {
   document.addEventListener("click", (e) => {
     if (S.tagPanelOpen && !(e.target.closest("#tag-panel") || e.target.closest("#btn-tags"))) closeTagPanel();
     if (S.jumpPanelOpen && !(e.target.closest("#jump-panel") || e.target.closest("#btn-jump"))) closeJumpPanel();
+    if (S.helpPanelOpen && !(e.target.closest("#help-panel") || e.target.closest("#btn-help"))) closeHelpPanel();
   });
 
   document.addEventListener("mousemove", onMouseMove, { passive: true });

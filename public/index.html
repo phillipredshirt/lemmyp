@@ -39,6 +39,7 @@
     <button id="btn-tags"    class="ctrl-btn" title="Title-tag filter  [G]">Tags<span id="tag-count" class="tag-count"></span></button>
     <button id="btn-jump"    class="ctrl-btn" title="Jump back in time  [J]">Jump&nbsp;▾</button>
     <button id="btn-post"    class="ctrl-btn" title="Open post  [O]">Post&nbsp;↗</button>
+    <button id="btn-help"    class="ctrl-btn" title="Help  [H]">?</button>
     <span  id="slide-counter" class="ctrl-counter"></span>
 
     <!-- title-tag filter panel: drops below the control bar (top:100% of #ctrl-bar) -->
@@ -80,6 +81,31 @@
       <div class="tag-status">
         <span id="jump-status"></span>
         <span class="tag-syntax">New sort only · jumps before viewing · months ≈ 30 days</span>
+      </div>
+    </div>
+
+    <!-- help panel: drops below the control bar -->
+    <div id="help-panel" class="hidden">
+      <div class="help-grid">
+        <div class="help-row"><span class="help-keys"><kbd>→</kbd> <kbd>Space</kbd> <kbd>PgDn</kbd></span><span class="help-desc">Next</span></div>
+        <div class="help-row"><span class="help-keys"><kbd>←</kbd> <kbd>PgUp</kbd></span><span class="help-desc">Previous</span></div>
+        <div class="help-row"><span class="help-keys"><kbd>Home</kbd> <kbd>End</kbd></span><span class="help-desc">First / Last</span></div>
+        <div class="help-row"><span class="help-keys"><kbd>F</kbd></span><span class="help-desc">Fullscreen</span></div>
+        <div class="help-row"><span class="help-keys"><kbd>M</kbd></span><span class="help-desc">Sound</span></div>
+        <div class="help-row"><span class="help-keys"><kbd>T</kbd></span><span class="help-desc">Title</span></div>
+        <div class="help-row"><span class="help-keys"><kbd>A</kbd></span><span class="help-desc">Auto-advance</span></div>
+        <div class="help-row"><span class="help-keys"><kbd>V</kbd></span><span class="help-desc">Pics-only</span></div>
+        <div class="help-row"><span class="help-keys"><kbd>N</kbd></span><span class="help-desc">NSFW filter</span></div>
+        <div class="help-row"><span class="help-keys"><kbd>G</kbd></span><span class="help-desc">Tags panel</span></div>
+        <div class="help-row"><span class="help-keys"><kbd>J</kbd></span><span class="help-desc">Jump back</span></div>
+        <div class="help-row"><span class="help-keys"><kbd>O</kbd></span><span class="help-desc">Open post</span></div>
+        <div class="help-row"><span class="help-keys"><kbd>C</kbd></span><span class="help-desc">Copy link</span></div>
+        <div class="help-row"><span class="help-keys"><kbd>P</kbd></span><span class="help-desc">Toggle controls</span></div>
+        <div class="help-row"><span class="help-keys"><kbd>H</kbd></span><span class="help-desc">Help</span></div>
+        <div class="help-row"><span class="help-keys"><kbd>Esc</kbd></span><span class="help-desc">Close panel / Selector</span></div>
+      </div>
+      <div class="help-footer">
+        <a href="https://github.com/phillipredshirt/lemmyp" target="_blank" rel="noopener">lemmyp on GitHub →</a>
       </div>
     </div>
   </div>
