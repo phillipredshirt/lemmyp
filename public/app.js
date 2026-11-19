@@ -242,6 +242,18 @@ function dataHasMore(data, posts) {
   return (typeof data.has_more === "boolean") ? data.has_more : posts.length >= PAGE_SIZE;
 }
 
+// page 1 of New sort starts with pinned posts, out of time order — drop the
+// leading run while timestamps are increasing (shared by the jump seek and
+// the prev-page load, so both apply the same rule)
+function skipPinned(posts) {
+  let skip = 0;
+  for (let i = 0; i < posts.length - 1; i++) {
+    const a = postTime(posts[i].post), b = postTime(posts[i + 1].post);
+    if (a > 0 && b > 0 && a < b) skip = i + 1; else break;
+  }
+  return posts.slice(skip);
+}
+
 // ---- slide type detection ------------------------------------------------
 function slideType(post) {
   const ct = post.url_content_type || "";
@@ -455,6 +467,8 @@ function prev() {
   if (S.idx > 0) {
     S.idx--;
     renderSlide();
+  } else if (S.page > 1 && !S.loading && !S.jumping) {
+    loadPrevPage();
   }
 }
 
@@ -466,6 +480,34 @@ function goTo(i) {
 function stopVideo() {
   const v = el.mediaBox.querySelector("video");
   if (v) { v.pause(); v.src = ""; v.load(); }
+}
+
+// load the page NEWER than the current first slide (after a jump-back) and
+// continue from its oldest post, which sits immediately before the current head
+async function loadPrevPage() {
+  S.loading = true;
+  showLoading(true);
+  try {
+    const data = await fetchRawPage(S.page - 1);
+    let posts = data.posts || [];
+    if (S.page - 1 === 1) posts = skipPinned(posts);
+    const { media, hidden } = mediaFilter(posts);
+    const existing = new Set(S.slides.map(s => s.post.id));
+    const fresh = media.filter(p => !existing.has(p.post.id));
+    if (fresh.length > 0) {
+      S.slides = fresh.concat(S.slides);
+      S.idx = fresh.length - 1;   // oldest of the newer page
+      S.hiddenCount += hidden;
+      S.page = S.page - 1;
+      updateTagUI();
+    }
+    renderSlide();
+  } catch (err) {
+    toast("Couldn't load newer posts: " + err.message);
+  } finally {
+    S.loading = false;
+    showLoading(false);
+  }
 }
 
 // ---- prefetch next page --------------------------------------------------
@@ -756,14 +798,7 @@ async function jumpBack(amount, unit) {
     const data = await fetchRawPage(p);
     const raw = data.posts || [];
     let posts = raw;
-    if (p === 1) {
-      let skip = 0;
-      for (let i = 0; i < posts.length - 1; i++) {
-        const a = postTime(posts[i].post), b = postTime(posts[i + 1].post);
-        if (a > 0 && b > 0 && a < b) skip = i + 1; else break;
-      }
-      posts = posts.slice(skip);
-    }
+    if (p === 1) posts = skipPinned(posts);
     let oldest = Infinity;
     for (const it of posts) { const t = postTime(it.post); if (t > 0 && t < oldest) oldest = t; }
     // hasMore from the RAW count: pinned-skip must not shrink a full page below PAGE_SIZE
