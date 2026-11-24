@@ -208,8 +208,11 @@ async function htmlFallback(instance, qs, cacheKey, res) {
     // EMPTY feed for some communities (e.g. redheads@fedinsfw.app), while the
     // list layout always contains the full post markup.
     const page = await fetchHtml(`https://${instance}/c/${encodeURIComponent(communityName)}?layout=list&page=${pageNum}`);
+    if (page.status === 404) {
+      throw new Error(`Community "${communityName}" not found on ${instance}`);
+    }
     if (page.status !== 200 || !page.body) {
-      throw new Error("community page not fetchable");
+      throw new Error(`Community page not fetchable (HTTP ${page.status})`);
     }
     // A page past the end of the feed still returns 200 with the community
     // shell (canonical link) but zero post markers — that is a valid empty
@@ -234,9 +237,9 @@ async function htmlFallback(instance, qs, cacheKey, res) {
     const out = { posts: parsed.posts, has_more: hasMore };
     cacheSet(cacheKey, out);
     res.status(200).json(out);
-  } catch {
+  } catch (err) {
     res.status(502).json({
-      error: `${instance} returned a web page, not Lemmy API data — its hosting (PikaPods-style) blocks the JSON API. Ask the instance admin to expose /api/*, or use another instance.`,
+      error: err.message || `${instance} returned a web page, not Lemmy API data — its hosting (PikaPods-style) blocks the JSON API. Ask the instance admin to expose /api/*, or use another instance.`,
     });
   }
 }
