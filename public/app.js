@@ -58,6 +58,7 @@ const S = {
   autoPicsOnly: localStorage.getItem("lemmyp.autopics") === "1", // auto skips images only; holds on videos
   sound:     false,
   nsfwOn:    true,        // show NSFW by default
+  hideAnime: localStorage.getItem("lemmyp.hideanime") === "1", // hide anime/illustration posts
   titleVis:  true,
   ctrlVis:   true,
   lastMouse: Date.now(),
@@ -102,6 +103,7 @@ const el = {
   btnFull:     $("btn-full"),
   btnTitle:    $("btn-title"),
   btnNsfw:     $("btn-nsfw"),
+  btnAnime:    $("btn-anime"),
   btnPost:     $("btn-post"),
   btnPrev:     $("btn-prev"),
   btnNext:     $("btn-next"),
@@ -204,6 +206,7 @@ function mediaFilter(posts) {
     if (!post || post.deleted || post.removed) return false;
     if (!post.url) return false;
     if (S.nsfwOn === false && post.nsfw) return false;
+    if (S.hideAnime && isAnimePost(post.name)) { hidden++; return false; }
     if (!tagPasses(post.name)) { hidden++; return false; }
     return true;
   });
@@ -677,6 +680,57 @@ function toggleNsfw() {
   startSlideshow();
 }
 
+// ---- anime / illustration -----------------------------------------------
+function toggleAnime() {
+  S.hideAnime = !S.hideAnime;
+  el.btnAnime.classList.toggle("active", S.hideAnime);
+  try { localStorage.setItem("lemmyp.hideanime", S.hideAnime ? "1" : "0"); } catch (e) {}
+  // re-fetch to apply filter
+  S.page = 1;
+  S.slides = [];
+  S.idx = 0;
+  startSlideshow();
+}
+
+// ---- anime / illustration filter (global, persisted) --------------------
+// Two signals, OR'd. Both target the danbooru-style art-aggregator bot that
+// cross-posts into communities like microblogs:
+//   1. Artist credit in the title: "drawn by X" / "created by X".
+//      Near-zero false positives -- photos of real people never use this.
+//   2. A known anime/game franchise or character name.
+// Deliberately conservative: generic English words (fate, marvel, changed,
+// sonic, mario, ...) are excluded so real photos are not hidden. Add more
+// franchise names to ANIME_FRANCHISES if you see anime slipping through.
+const ANIME_ARTIST_RE = /drawn by|created by/i;
+const ANIME_FRANCHISES = [
+  // multi-word phrases (safe)
+  "genshin impact", "honkai star rail", "zenless zone zero", "wuthering waves",
+  "limbus company", "blue archive", "azur lane", "shining nikiki",
+  "delicious in dungeon", "doki doki literature club", "girls band cry",
+  "girls' band cry", "kantai collection", "boku no hero academia",
+  "my hero academia", "sonic the hedgehog", "warner brothers", "looney tunes",
+  "epic games", "project moon", "unknown worlds", "mob entertainment",
+  "animal crossing", "legend of zelda", "mario bros", "mega man", "dragon ball",
+  "my little pony", "quanzhi gaoshou", "tenmaku no jaadugar",
+  "punch punch forever", "arlo the alligator boy", "the nature of predators",
+  "hikaru ga shinda natsu", "dead or alive", "umineko no naku koro ni",
+  "delicious party", "meitantei precure",
+  // distinctive single words (not common English)
+  "arknights", "homumado", "precure", "umamusume", "danganronpa", "gintama",
+  "undertale", "touhou", "vocaloid", "hololive", "vtuber", "nijisanji",
+  "kizuna", "blazblue", "hypnovember", "kantai", "nikke", "rezero", "steins",
+  "honkai", "zenless", "wuthering", "limbus", "mlp", "4chan", "idolmaster",
+  "idol master", "pokemon", "pikachu", "cyberpunk", "nintendo", "blizzard",
+];
+const ANIME_FRANCHISE_RE = new RegExp(
+  "\\b(?:" + ANIME_FRANCHISES.map(s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\\$&")).join("|") + ")\\b",
+  "i"
+);
+function isAnimePost(title) {
+  if (!title) return false;
+  return ANIME_ARTIST_RE.test(title) || ANIME_FRANCHISE_RE.test(title);
+}
+
 // ---- title-tag filter ----------------------------------------------------
 // Extract every [bracketed] token from a title (any position), lowercased,
 // so [M]/[m] match. Returns a Set of tags.
@@ -1005,6 +1059,7 @@ async function startSlideshow() {
 function showSelector() {
   el.slideshow.classList.add("hidden");
   el.selector.classList.remove("hidden");
+  populateInstanceList(); // refresh datalist (may include instances added this session)
   // pre-fill
   el.selInstance.value = S.instance;
   if (S.community) el.selCommunity.value = S.community;
@@ -1032,6 +1087,7 @@ function setupKeys() {
       case "a": case "A": toggleAuto(); break;
       case "v": case "V": toggleAutoPicsOnly(); break;
       case "n": case "N": toggleNsfw(); break;
+      case "b": case "B": toggleAnime(); break;
       case "g": case "G": toggleTagPanel(); break;
       case "j": case "J": toggleJumpPanel(); break;
       case "h": case "H": toggleHelpPanel(); break;
@@ -1092,30 +1148,70 @@ function setupClick() {
 }
 
 // ---- selector wiring -----------------------------------------------------
-function setupSelector() {
-  // populate instance list
+// ---- instance list (free-text + datalist; user additions persisted) ------
+const USER_INSTANCES_KEY = "lemmyp.instances";
+function loadUserInstances() {
+  try { return JSON.parse(localStorage.getItem(USER_INSTANCES_KEY) || "[]"); }
+  catch { return []; }
+}
+function rememberInstance(host) {
+  if (!host) return;
+  const known = new Set(INSTANCES.map(i => i.id));
+  if (known.has(host)) return;
+  const list = loadUserInstances();
+  if (!list.includes(host)) {
+    list.push(host);
+    try { localStorage.setItem(USER_INSTANCES_KEY, JSON.stringify(list)); } catch (e) {}
+  }
+}
+function isValidInstanceHost(h) {
+  return typeof h === "string" && /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(h) && !h.includes("..");
+}
+function populateInstanceList() {
+  const dl = $("instance-dl");
+  if (!dl) return;
+  dl.innerHTML = "";
+  const known = new Set(INSTANCES.map(i => i.id));
   INSTANCES.forEach(inst => {
     const opt = document.createElement("option");
     opt.value = inst.id;
-    opt.textContent = inst.label;
-    el.selInstance.appendChild(opt);
+    if (inst.label !== inst.id) opt.label = inst.label;
+    dl.appendChild(opt);
   });
+  loadUserInstances().forEach(host => {
+    if (known.has(host)) return;
+    const opt = document.createElement("option");
+    opt.value = host;
+    dl.appendChild(opt);
+  });
+}
+
+function setupSelector() {
+  populateInstanceList();
 
   el.selStart.onclick = () => {
-    S.instance = el.selInstance.value;
+    S.instance = el.selInstance.value.trim().toLowerCase();
     S.community = el.selCommunity.value.trim() || null;
     S.sort = el.selSort.value;
+    if (!isValidInstanceHost(S.instance)) {
+      toast("Enter a valid instance hostname (e.g. lemmy.world)");
+      return;
+    }
     if (!S.community) {
       toast("Enter a community name");
       return;
     }
+    rememberInstance(S.instance);
     // update URL without reload
     history.pushState(null, "", `/c/${encodeURIComponent(S.community)}?instance=${S.instance}&sort=${S.sort}`);
     startSlideshow();
   };
 
-  // Enter key in community input
+  // Enter key in community or instance input
   el.selCommunity.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") el.selStart.click();
+  });
+  el.selInstance.addEventListener("keydown", (e) => {
     if (e.key === "Enter") el.selStart.click();
   });
 }
@@ -1138,6 +1234,7 @@ function setupButtons() {
   el.btnFull.onclick    = toggleFullscreen;
   el.btnTitle.onclick   = toggleTitle;
   el.btnNsfw.onclick    = toggleNsfw;
+  el.btnAnime.onclick   = toggleAnime;
   el.btnTags.onclick    = toggleTagPanel;
   el.btnJump.onclick    = toggleJumpPanel;
   el.btnHelp.onclick    = toggleHelpPanel;
@@ -1146,8 +1243,9 @@ function setupButtons() {
   el.btnPrev.onclick    = prev;
   el.btnNext.onclick    = next;
 
-  // NSFW button starts active (NSFW shown)
+  // NSFW button starts active (NSFW shown); Anime button reflects saved state
   el.btnNsfw.classList.add("active");
+  el.btnAnime.classList.toggle("active", S.hideAnime);
   el.btnPics.classList.toggle("active", S.autoPicsOnly);
 
   // tag filter: presets, text field, initial state

@@ -36,6 +36,7 @@
     <button id="btn-full"    class="ctrl-btn" title="Fullscreen  [F]">⛶</button>
     <button id="btn-title"   class="ctrl-btn" title="Title  [T]">T</button>
     <button id="btn-nsfw"    class="ctrl-btn" title="Toggle NSFW filter  [N]">NSFW</button>
+    <button id="btn-anime"   class="ctrl-btn" title="Hide anime/illustration posts  [B]">Anime</button>
     <button id="btn-tags"    class="ctrl-btn" title="Title-tag filter  [G]">Tags<span id="tag-count" class="tag-count"></span></button>
     <button id="btn-jump"    class="ctrl-btn" title="Jump back in time  [J]">Jump&nbsp;▾</button>
     <button id="btn-post"    class="ctrl-btn" title="Open post  [O]">Post&nbsp;↗</button>
@@ -96,6 +97,7 @@
         <div class="help-row"><span class="help-keys"><kbd>A</kbd></span><span class="help-desc">Auto-advance</span></div>
         <div class="help-row"><span class="help-keys"><kbd>V</kbd></span><span class="help-desc">Pics-only</span></div>
         <div class="help-row"><span class="help-keys"><kbd>N</kbd></span><span class="help-desc">NSFW filter</span></div>
+        <div class="help-row"><span class="help-keys"><kbd>B</kbd></span><span class="help-desc">Hide anime/illustration</span></div>
         <div class="help-row"><span class="help-keys"><kbd>G</kbd></span><span class="help-desc">Tags panel</span></div>
         <div class="help-row"><span class="help-keys"><kbd>J</kbd></span><span class="help-desc">Jump back</span></div>
         <div class="help-row"><span class="help-keys"><kbd>O</kbd></span><span class="help-desc">Open post</span></div>
@@ -142,7 +144,8 @@
 
   <div class="sel-row">
     <label for="sel-instance">Instance</label>
-    <select id="sel-instance"></select>
+    <input id="sel-instance" type="text" list="instance-dl" placeholder="e.g. lemmy.world" autocomplete="off" spellcheck="false">
+    <datalist id="instance-dl"></datalist>
   </div>
   <div class="sel-row">
     <label for="sel-community">Community</label>
