@@ -192,6 +192,62 @@ function parseCommunityPage(html, instance, communityName) {
   return { posts, rawCount: marks.length };
 }
 
+// Guess an image content type from a URL's extension. The front-end only
+// needs the "image/" prefix to pick the <img> branch, but keep it accurate.
+function guessImageType(url) {
+  const ext = (url.split("?")[0].split(".").pop() || "").toLowerCase();
+  const map = { jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", gif: "image/gif", webp: "image/webp", avif: "image/avif", bmp: "image/bmp" };
+  return map[ext] || "image/jpeg";
+}
+
+// Expand multi-image gallery posts. On the community page a single-image
+// post's preview links straight to the image (an absolute URL), but a gallery
+// post's preview links to the POST PAGE (a relative /c/.../p/... URL) because
+// there is no single image to link to. The front-end renders post.url as an
+// <img>, so a post-page URL loads an HTML page and shows nothing. For those,
+// fetch the post page, read its post_gallery images, and turn one post into N
+// slides (one per image) so they play one after the other. If the post page
+// can't be fetched, fall back to the preview thumbnail so at least the first
+// image still shows. Post pages are fetched in parallel to keep latency down.
+async function expandGalleries(posts, instance) {
+  const isPostPage = (p) => typeof p.url === "string" && p.url.startsWith("/");
+  const galleryIdx = posts.map((item, i) => (isPostPage(item.post) ? i : -1)).filter((i) => i !== -1);
+  const galleryImgs = await Promise.all(galleryIdx.map(async (i) => {
+    try {
+      const page = await fetchHtml(`https://${instance}${posts[i].post.url}`);
+      if (page.status === 200 && page.body) {
+        // Gallery images carry the gallery-thumbnail class; match the whole
+        // <img> tag so attribute order (src before class) doesn't matter.
+        return [...page.body.matchAll(/<img\b[^>]*>/g)]
+          .map((t) => t[0])
+          .filter((t) => /gallery-thumbnail/.test(t))
+          .map((t) => (t.match(/src="(https?:\/\/[^"]+)"/) || [])[1])
+          .filter(Boolean);
+      }
+    } catch { /* fall through to thumbnail */ }
+    return [];
+  }));
+  const out = [];
+  let gi = 0;
+  for (const item of posts) {
+    const p = item.post;
+    if (!isPostPage(p)) { out.push(item); continue; }
+    const imgs = [...new Set(galleryImgs[gi++])]; // dedupe, keep order
+    if (imgs.length === 0) {
+      // No gallery on the post page — show the preview thumbnail instead of
+      // the (unrenderable) post-page URL.
+      if (p.thumbnail_url) {
+        out.push({ ...item, post: { ...p, url: p.thumbnail_url, url_content_type: guessImageType(p.thumbnail_url) } });
+      }
+      continue;
+    }
+    for (const img of imgs) {
+      out.push({ ...item, post: { ...p, url: img, thumbnail_url: img, url_content_type: guessImageType(img) } });
+    }
+  }
+  return out;
+}
+
 // Scrape the community page when the JSON API is blocked; on any failure
 // keep the original specific 502 message as the last resort.
 async function htmlFallback(instance, qs, cacheKey, res) {
@@ -233,8 +289,10 @@ async function htmlFallback(instance, qs, cacheKey, res) {
     // The rendered "next" button is present even on the LAST page (it leads to
     // a pinned-post-only page), so link presence is not a usable signal.
     const hasMore = parsed.rawCount >= 95;
-    console.log(`→ [html fallback] ${instance}/c/${communityName} p${pageNum}: ${parsed.posts.length} posts (raw ${parsed.rawCount}, more=${hasMore})`);
-    const out = { posts: parsed.posts, has_more: hasMore };
+    // Expand gallery posts (post-page hrefs) into one slide per image.
+    const posts = await expandGalleries(parsed.posts, instance);
+    console.log(`→ [html fallback] ${instance}/c/${communityName} p${pageNum}: ${posts.length} posts (raw ${parsed.rawCount}, more=${hasMore})`);
+    const out = { posts, has_more: hasMore };
     cacheSet(cacheKey, out);
     res.status(200).json(out);
   } catch (err) {
