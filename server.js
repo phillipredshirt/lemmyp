@@ -1,9 +1,121 @@
 const express = require("express");
 const path = require("path");
 const https = require("https");
+const dns = require("dns");
+const net = require("net");
 
 const app = express();
 const PORT = process.env.PORT || 8080;
+
+// ---------------------------------------------------------------------------
+// Config — all overridable via env. Defaults are safe for LAN-only daily use.
+// ---------------------------------------------------------------------------
+const RATE_LIMIT       = parseInt(process.env.RATE_LIMIT || "120", 10);       // sustained req/min per IP (0 = off)
+const RATE_LIMIT_BURST = parseInt(process.env.RATE_LIMIT_BURST || "40", 10);  // instant burst per IP
+const ALERT_WEBHOOK    = process.env.ALERT_WEBHOOK || "";                     // e.g. https://ntfy.sh/<topic>; empty = log only
+const ALERT_COOLDOWN   = parseInt(process.env.ALERT_COOLDOWN || "900", 10) * 1000; // ms between repeat alerts per condition
+const SPIKE_PER_IP     = parseInt(process.env.SPIKE_PER_IP || "200", 10);     // req/60s from one IP that alerts
+const SPIKE_TOTAL      = parseInt(process.env.SPIKE_TOTAL || "600", 10);      // req/60s total that alerts
+const MAX_DISTINCT_IPS = parseInt(process.env.MAX_DISTINCT_IPS || "50", 10);  // distinct IPs/60s that alerts
+
+// ---------------------------------------------------------------------------
+// Alerting + anomaly monitoring. With no ALERT_WEBHOOK set this only logs,
+// so there is zero behaviour change until you point it at a notification URL
+// (ntfy works out of the box: POST the message as a plain-text body).
+// ---------------------------------------------------------------------------
+const lastAlertAt = new Map(); // condition -> ms
+async function alert(condition, message) {
+  const now = Date.now();
+  if (now - (lastAlertAt.get(condition) || 0) < ALERT_COOLDOWN) return;
+  lastAlertAt.set(condition, now);
+  const line = `[lemmyp] ${condition}: ${message}`;
+  console.warn(line);
+  if (!ALERT_WEBHOOK) return;
+  try {
+    const u = new URL(ALERT_WEBHOOK);
+    await new Promise((resolve) => {
+      const r = https.request(u, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain", "X-Priority": "high", "Content-Length": Buffer.byteLength(line) },
+        timeout: 5000,
+      }, (res) => { res.resume(); res.on("end", resolve); });
+      r.on("error", resolve);
+      r.on("timeout", () => { r.destroy(); resolve(); });
+      r.write(line);
+      r.end();
+    });
+  } catch { /* alerting must never crash the app */ }
+}
+
+// sliding 60s window of per-IP request counts + global counters
+const WINDOW_MS = 60_000;
+let winStart = Date.now();
+const winIps = new Map(); // ip -> count in current window
+let totalRequests = 0;
+let lastSweep = 0;
+
+const monitor = {
+  record(req) {
+    const ip = req.ip || (req.socket && req.socket.remoteAddress) || "unknown";
+    const now = Date.now();
+    if (now - winStart > WINDOW_MS) { winIps.clear(); winStart = now; }
+    winIps.set(ip, (winIps.get(ip) || 0) + 1);
+    totalRequests++;
+    if (now - lastSweep < 1000) return; // sweep at most once per second
+    lastSweep = now;
+    let total = 0, topIp = null, topN = 0;
+    for (const [i, n] of winIps) { total += n; if (n > topN) { topN = n; topIp = i; } }
+    if (winIps.size > MAX_DISTINCT_IPS) alert("scanning", `${winIps.size} distinct source IPs in 60s (limit ${MAX_DISTINCT_IPS})`);
+    if (topN > SPIKE_PER_IP) alert("ip-spike", `${topN} req/60s from ${topIp} (limit ${SPIKE_PER_IP})`);
+    if (total > SPIKE_TOTAL) alert("traffic-spike", `${total} req/60s total (limit ${SPIKE_TOTAL})`);
+  },
+  ssrfAttempt(req, instance) {
+    const ip = req.ip || (req.socket && req.socket.remoteAddress) || "unknown";
+    alert("ssrf", `disallowed instance "${instance}" requested from ${ip}`);
+  },
+  rateLimited(req) {
+    const ip = req.ip || (req.socket && req.socket.remoteAddress) || "unknown";
+    alert("rate-limited", `rate limit hit for ${ip}`);
+  },
+};
+
+// per-IP token bucket for rate limiting
+const buckets = new Map(); // ip -> { tokens, last }
+function rateLimitOk(ip) {
+  if (RATE_LIMIT <= 0) return true;
+  const now = Date.now();
+  let b = buckets.get(ip);
+  if (!b) { b = { tokens: RATE_LIMIT_BURST, last: now }; buckets.set(ip, b); }
+  b.tokens = Math.min(RATE_LIMIT_BURST, b.tokens + (now - b.last) * (RATE_LIMIT / 60000));
+  b.last = now;
+  if (b.tokens >= 1) { b.tokens -= 1; return true; }
+  return false;
+}
+
+// periodic cleanup of stale buckets + alert cooldowns
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, b] of buckets) if (now - b.last > 120_000) buckets.delete(ip);
+  for (const [c, t] of lastAlertAt) if (now - t > ALERT_COOLDOWN * 2) lastAlertAt.delete(c);
+}, 60_000).unref();
+
+// middleware: rate limit + monitoring. /health is exempt so uptime probes
+// (Uptime Kuma etc.) don't count against the limits or the anomaly window.
+app.use((req, res, next) => {
+  if (req.path === "/health") return next();
+  const ip = req.ip || (req.socket && req.socket.remoteAddress) || "unknown";
+  if (!rateLimitOk(ip)) {
+    monitor.rateLimited(req);
+    return res.status(429).set("Retry-After", "30").json({ error: "Too many requests — slow down" });
+  }
+  monitor.record(req);
+  next();
+});
+
+// health endpoint for Uptime Kuma / external probes
+app.get("/health", (req, res) => {
+  res.json({ ok: true, uptime_s: Math.round(process.uptime()), requests: totalRequests, distinct_ips_60s: winIps.size, cache_entries: cache.size });
+});
 
 // ---------------------------------------------------------------------------
 // Known instances (also used for SSRF validation)
@@ -18,21 +130,99 @@ const ALLOWED_INSTANCES = new Set([
   "lemmy.arbrelow.com", "lcode.us", "lemmy.rivers.rocks",
 ]);
 
-// Allow any .dev, .app, .social, .world, .ml, .dev, .org, .net, .com, etc.
-// We validate by trying to resolve the hostname to avoid open-proxy SSRF.
-function isAllowedInstance(host) {
-  if (ALLOWED_INSTANCES.has(host)) return true;
-  // Basic sanity: must look like a hostname, no spaces, no path
-  if (!/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(host)) return false;
-  if (host.includes("..")) return false;
-  // Block private/internal ranges to prevent SSRF
-  if (/^localhost$/i.test(host)) return false;
-  if (/^127\./i.test(host)) return false;
-  if (/^10\./i.test(host)) return false;
-  if (/^192\.168\./i.test(host)) return false;
-  if (/^172\.(1[6-9]|2\d|3[01])\./i.test(host)) return false;
-  if (/^\[::1\]$/i.test(host)) return false;
+// ---------------------------------------------------------------------------
+// SSRF guard. The allowlist above is trusted; anything else must (a) look
+// like a bare hostname/IP and (b) resolve ONLY to public addresses. A string
+// blocklist alone is bypassable (an attacker domain A-records to 10.x, DNS
+// rebinding, IPv6, etc.), so we resolve the name and check every address.
+// ---------------------------------------------------------------------------
+function ip4ToInt(ip) {
+  return ip.split(".").reduce((acc, o) => (acc << 8) + parseInt(o, 10), 0) >>> 0;
+}
+function inCidrV4(ipInt, cidr) {
+  const [base, bits] = cidr.split("/");
+  const n = parseInt(bits, 10);
+  const mask = n === 0 ? 0 : (~0 << (32 - n)) >>> 0;
+  return (ipInt & mask) === (ip4ToInt(base) & mask);
+}
+const PRIVATE_V4 = [
+  "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16",
+  "172.16.0.0/12", "192.0.0.0/24", "192.0.2.0/24", "192.168.0.0/16",
+  "198.18.0.0/15", "224.0.0.0/4", "240.0.0.0/4",
+];
+function ip6ToBytes(ip) {
+  const s = ip.toLowerCase();
+  const v4map = s.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  if (v4map) {
+    const b = Buffer.alloc(16);
+    b[10] = 0xff; b[11] = 0xff; // the "ffff" group of ::ffff:a.b.c.d
+    b.set(v4map[1].split(".").map(Number), 12);
+    return b;
+  }
+  let halves;
+  if (s.includes("::")) {
+    const [left, right] = s.split("::");
+    const l = left ? left.split(":") : [];
+    const r = right ? right.split(":") : [];
+    halves = [...l, ...Array(8 - l.length - r.length).fill("0"), ...r];
+  } else {
+    halves = s.split(":");
+  }
+  if (halves.length !== 8) return null;
+  const b = Buffer.alloc(16);
+  for (let i = 0; i < 8; i++) b.writeUInt16BE(parseInt(halves[i] || "0", 16), i * 2);
+  return b;
+}
+function inCidrV6(buf, cidr) {
+  const [base, bits] = cidr.split("/");
+  const baseBuf = ip6ToBytes(base);
+  const n = parseInt(bits, 10);
+  const full = Math.floor(n / 8);
+  for (let i = 0; i < full; i++) if (buf[i] !== baseBuf[i]) return false;
+  const rem = n % 8;
+  if (rem && (buf[full] & (0xff << (8 - rem))) !== (baseBuf[full] & (0xff << (8 - rem)))) return false;
   return true;
+}
+const PRIVATE_V6 = [
+  "::/128", "::1/128", "::ffff:0:0/96", "64:ff9b::/96",
+  "fc00::/7", "fe80::/10", "ff00::/8", "2001:db8::/32",
+];
+function isPrivateOrReserved(ip) {
+  const v = net.isIP(ip);
+  if (v === 4) return PRIVATE_V4.some((c) => inCidrV4(ip4ToInt(ip), c));
+  if (v === 6) {
+    const b = ip6ToBytes(ip);
+    if (!b) return true; // unparseable -> fail closed
+    return PRIVATE_V6.some((c) => inCidrV6(b, c));
+  }
+  return true; // not an IP literal -> fail closed
+}
+
+// Resolve a hostname and require that EVERY address it returns is public.
+// Results are cached briefly so the common path adds no per-request DNS cost.
+const ipValCache = new Map(); // host -> { ok, time }
+const IP_VAL_TTL = 300_000;
+async function hostResolvesPublic(host) {
+  const now = Date.now();
+  const c = ipValCache.get(host);
+  if (c && now - c.time < IP_VAL_TTL) return c.ok;
+  let ok = false;
+  try {
+    const addrs = await dns.promises.lookup(host, { all: true, verbatim: true });
+    ok = addrs.length > 0 && addrs.every((a) => !isPrivateOrReserved(a.address));
+  } catch { ok = false; }
+  ipValCache.set(host, { ok, time: now });
+  if (ipValCache.size > 2000) ipValCache.delete(ipValCache.keys().next().value);
+  return ok;
+}
+
+// Allow any public instance. Trusted allowlisted hosts skip the DNS check;
+// everything else must resolve to public addresses only (SSRF guard).
+async function isAllowedInstance(host) {
+  if (ALLOWED_INSTANCES.has(host)) return true;
+  if (typeof host !== "string" || host.length > 253 || host.includes("..")) return false;
+  if (!/^[a-z0-9.-]+$/i.test(host)) return false; // bare hostname or IP literal only
+  return await hostResolvesPublic(host);
 }
 
 // ---------------------------------------------------------------------------
@@ -84,12 +274,15 @@ const BROWSER_HEADERS = {
   Cookie: "anoobis2=ok; anoobis3=ok; warned=yes",
 };
 
-function fetchHtml(url, redirects = 5) {
-  return new Promise((resolve) => {
+async function fetchHtml(url, redirects = 5) {
+  let u;
+  try { u = new URL(url); } catch { return { status: 0 }; }
+  if (u.protocol !== "https:") return { status: 0 }; // https only
+  const first = await new Promise((resolve) => {
     const req = https.get(url, { headers: BROWSER_HEADERS, timeout: 15_000 }, (res) => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirects > 0) {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume();
-        return resolve(fetchHtml(new URL(res.headers.location, url).toString(), redirects - 1));
+        return resolve({ redirect: new URL(res.headers.location, url).toString(), status: res.statusCode });
       }
       let body = "";
       res.on("data", (c) => (body += c));
@@ -98,6 +291,16 @@ function fetchHtml(url, redirects = 5) {
     req.on("timeout", () => { req.destroy(); resolve({ status: 0 }); });
     req.on("error", () => resolve({ status: 0 }));
   });
+  if (first.redirect && redirects > 0) {
+    let nu;
+    try { nu = new URL(first.redirect); } catch { return { status: 0 }; }
+    // Re-validate the redirect target: https + resolves to a public IP only.
+    if (nu.protocol === "https:" && (await hostResolvesPublic(nu.hostname))) {
+      return fetchHtml(first.redirect, redirects - 1);
+    }
+    return { status: first.status, body: "" }; // don't follow an unsafe redirect
+  }
+  return first;
 }
 
 function decodeEntities(s) {
@@ -334,14 +537,15 @@ app.get("/api/rg-duration", async (req, res) => {
 // ---------------------------------------------------------------------------
 // API proxy:  /api/:instance/*  →  https://:instance/api/v3/*
 // ---------------------------------------------------------------------------
-app.get("/api/:instance/*", (req, res) => {
+app.get("/api/:instance/*", async (req, res) => {
   const { instance } = req.params;
   const apiPath = req.params[0] || "";
   const qs = req.originalUrl.includes("?")
     ? req.originalUrl.split("?").slice(1).join("?")
     : "";
 
-  if (!isAllowedInstance(instance)) {
+  if (!(await isAllowedInstance(instance))) {
+    monitor.ssrfAttempt(req, instance);
     return res.status(400).json({ error: "Unknown or disallowed instance" });
   }
 

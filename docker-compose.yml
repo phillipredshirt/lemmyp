@@ -4,6 +4,15 @@ services:
     ports:
       - "9090:8080"
     restart: unless-stopped
-    # Optional: override default instance
+    # --- Security / monitoring (all optional; defaults are safe for LAN use) ---
+    # Uncomment and fill in what you want. With no ALERT_WEBHOOK set, the
+    # monitoring only writes to the container log (docker logs lemmyp).
     # environment:
     #   - PORT=8080
+    #   - RATE_LIMIT=120            # sustained req/min per IP (0 disables)
+    #   - RATE_LIMIT_BURST=40       # instant burst allowed per IP
+    #   - ALERT_WEBHOOK=            # e.g. https://ntfy.sh/lemmyp  (empty = log only)
+    #   - ALERT_COOLDOWN=900        # seconds between repeat alerts per condition
+    #   - SPIKE_PER_IP=200          # req/60s from one IP that triggers an alert
+    #   - SPIKE_TOTAL=600           # req/60s total that triggers an alert
+    #   - MAX_DISTINCT_IPS=50       # distinct source IPs/60s that triggers an alert
